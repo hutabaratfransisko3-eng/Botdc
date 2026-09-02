@@ -12,11 +12,12 @@ const {
 
 const { Client: SelfbotClient } = require('discord.js-selfbot-v13');
 
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const CLIENT_ID = process.env.CLIENT_ID;
+const BOT_TOKEN = process.env.BOT_TOKEN ? process.env.BOT_TOKEN.replace(/['"]/g, '').trim() : null;
+const CLIENT_ID = process.env.CLIENT_ID ? process.env.CLIENT_ID.replace(/['"]/g, '').trim() : null;
 
-let userToken = process.env.USER_TOKEN || null;
-let targetChannelId = process.env.TARGET_CHANNEL_ID || null;
+// Otomatis membersihkan spasi & tanda kutip dari Railway
+let userToken = process.env.USER_TOKEN ? process.env.USER_TOKEN.replace(/['"]/g, '').trim() : null;
+let targetChannelId = process.env.TARGET_CHANNEL_ID ? process.env.TARGET_CHANNEL_ID.replace(/['"]/g, '').trim() : null;
 
 const bot = new BotClient({ 
   intents: [ GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent ] 
@@ -42,15 +43,17 @@ const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
 bot.on('interactionCreate', async interaction => {
   if (interaction.isChatInputCommand()) {
     if (interaction.commandName === 'setakun') {
-      userToken = interaction.options.getString('token');
-      return interaction.reply({ content: '✅ User Token disimpan!', ephemeral: true });
+      userToken = interaction.options.getString('token').trim();
+      return interaction.reply({ content: '✅ User Token disimpan sementara!', ephemeral: true });
     }
     if (interaction.commandName === 'setchannelcs') {
-      targetChannelId = interaction.options.getString('channel_id');
-      return interaction.reply({ content: `✅ Channel target: \`${targetChannelId}\``, ephemeral: true });
+      targetChannelId = interaction.options.getString('channel_id').trim();
+      return interaction.reply({ content: `✅ Channel target sementara: \`${targetChannelId}\``, ephemeral: true });
     }
     if (interaction.commandName === 'kirimcs') {
-      if (!userToken || !targetChannelId) return interaction.reply({ content: '❌ Set akun & channel dulu!', ephemeral: true });
+      if (!userToken || !targetChannelId) {
+        return interaction.reply({ content: '❌ Token Akun atau ID Channel belum diset. Pastikan env variables di Railway sudah benar!', ephemeral: true });
+      }
 
       const modal = new ModalBuilder().setCustomId('csModal').setTitle('Formulir Character Story');
       modal.addComponents(
@@ -85,27 +88,78 @@ bot.on('interactionCreate', async interaction => {
       const imageUrls = message.attachments.map(a => a.url);
       const originChannel = interaction.channel;
       
-      await interaction.followUp({ content: '🚀 **Menghubungkan akun...** Mencoba mengirim CS atau masuk ke Mode Siaga.', ephemeral: true });
+      await interaction.followUp({ content: '🚀 Gambar diterima, memulai eksekusi bot...', ephemeral: true });
       if (message.deletable) await message.delete();
 
+      // Membuat pesan Live Tracker
+      const statusMsg = await originChannel.send('🔄 **[Sistem]** Menginisialisasi login ke akun...');
+
       try {
-        const selfClient = new SelfbotClient();
+        const selfClient = new SelfbotClient({ checkUpdate: false });
         let isSent = false;
 
         const attemptSend = async () => {
           if (isSent) return;
           try {
+            await statusMsg.edit(`🔄 **[Sistem]** Mencari channel target: \`${targetChannelId}\`...`);
             const targetChannel = await selfClient.channels.fetch(targetChannelId);
+            
+            if (!targetChannel) {
+              await statusMsg.edit('❌ **[Error]** Channel target tidak ditemukan! Pastikan ID Channel benar dan akun masuk ke server.');
+              selfClient.destroy();
+              return;
+            }
+
+            await statusMsg.edit(`🔄 **[Sistem]** Channel ditemukan! Mencoba mengirim formulir CS...`);
             await targetChannel.send({ content: contentMessage, files: imageUrls });
             isSent = true;
             
             const timeString = new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit', second: '2-digit' });
-            await originChannel.send(`✅ **CS Berhasil dikirim pada jam ${timeString} WIB**`);
+            await statusMsg.edit(`✅ **CS Berhasil dikirim pada jam ${timeString} WIB**`);
             selfClient.destroy();
           } catch (err) {
             if (err.code !== 50013) { 
               console.error(err);
+              await statusMsg.edit(`❌ **[Error Pengiriman]** ${err.message}`);
               selfClient.destroy();
+            } else {
+              await statusMsg.edit(`⏳ **[Mode Siaga]** Channel masih di-lock (Terkunci). Menunggu ada admin yang buka channel...`);
+            }
+          }
+        };
+
+        selfClient.on('ready', async () => {
+          await statusMsg.edit(`✅ **[Sistem]** Berhasil login sebagai: \`${selfClient.user.tag}\`. Memulai proses...`);
+          await attemptSend(); 
+        });
+
+        selfClient.on('messageCreate', async msg => {
+          if (msg.channel.id === targetChannelId) await attemptSend();
+        });
+
+        selfClient.on('channelUpdate', async (oldCh, newCh) => {
+          if (newCh.id === targetChannelId) await attemptSend();
+        });
+
+        await selfClient.login(userToken).catch(async err => {
+          console.error(err);
+          await statusMsg.edit(`❌ **[Error Login]** Gagal login! Pastikan token akun BENAR dan belum kadaluwarsa (ambil ulang di browser).\n*Log: ${err.message}*`);
+        });
+
+      } catch (err) {
+        await statusMsg.edit(`❌ **[Error Fatal]** Terjadi kesalahan pada sistem: ${err.message}`);
+      }
+    });
+
+    collector.on('end', async () => {
+      if (!isImageCollected) {
+        await interaction.followUp({ content: '⏳ Waktu habis! Kamu tidak mengirimkan gambar tepat waktu.', ephemeral: true });
+      }
+    });
+  }
+});
+
+bot.login(BOT_TOKEN);              selfClient.destroy();
             }
           }
         };
