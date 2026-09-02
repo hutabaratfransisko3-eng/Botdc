@@ -35,7 +35,7 @@ const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
     await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
     console.log('[BOT] Commands terdaftar.');
   } catch (e) {
-    console.error(e);
+    console.error('[REST ERROR]', e);
   }
 })();
 
@@ -117,7 +117,7 @@ bot.on('interactionCreate', async interaction => {
             selfClient.destroy();
           } catch (err) {
             if (err.code !== 50013) { 
-              console.error(err);
+              console.error('[SEND ERROR]', err);
               await statusMsg.edit(`❌ **[Error Pengiriman]** ${err.message}`);
               selfClient.destroy();
             } else {
@@ -140,7 +140,7 @@ bot.on('interactionCreate', async interaction => {
         });
 
         await selfClient.login(userToken).catch(async err => {
-          console.error(err);
+          console.error('[LOGIN ERROR]', err);
           await statusMsg.edit(`❌ **[Error Login]** Gagal login! Pastikan token akun BENAR.\n*Log: ${err.message}*`);
         });
 
@@ -152,97 +152,6 @@ bot.on('interactionCreate', async interaction => {
     collector.on('end', async () => {
       if (!isImageCollected) {
         await interaction.followUp({ content: '⏳ Waktu habis! Kamu tidak mengirimkan gambar tepat waktu.', ephemeral: true });
-      }
-    });
-  }
-});
-
-bot.login(BOT_TOKEN);            await statusMsg.edit(`🔄 **[Sistem]** Mencari channel target: \`${targetChannelId}\`...`);
-            const targetChannel = await selfClient.channels.fetch(targetChannelId);
-            
-            if (!targetChannel) {
-              await statusMsg.edit('❌ **[Error]** Channel target tidak ditemukan! Pastikan ID Channel benar dan akun masuk ke server.');
-              selfClient.destroy();
-              return;
-            }
-
-            await statusMsg.edit(`🔄 **[Sistem]** Channel ditemukan! Mencoba mengirim formulir CS...`);
-            await targetChannel.send({ content: contentMessage, files: imageUrls });
-            isSent = true;
-            
-            const timeString = new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit', second: '2-digit' });
-            await statusMsg.edit(`✅ **CS Berhasil dikirim pada jam ${timeString} WIB**`);
-            selfClient.destroy();
-          } catch (err) {
-            if (err.code !== 50013) { 
-              console.error(err);
-              await statusMsg.edit(`❌ **[Error Pengiriman]** ${err.message}`);
-              selfClient.destroy();
-            } else {
-              await statusMsg.edit(`⏳ **[Mode Siaga]** Channel masih di-lock (Terkunci). Menunggu ada admin yang buka channel...`);
-            }
-          }
-        };
-
-        selfClient.on('ready', async () => {
-          await statusMsg.edit(`✅ **[Sistem]** Berhasil login sebagai: \`${selfClient.user.tag}\`. Memulai proses...`);
-          await attemptSend(); 
-        });
-
-        selfClient.on('messageCreate', async msg => {
-          if (msg.channel.id === targetChannelId) await attemptSend();
-        });
-
-        selfClient.on('channelUpdate', async (oldCh, newCh) => {
-          if (newCh.id === targetChannelId) await attemptSend();
-        });
-
-        await selfClient.login(userToken).catch(async err => {
-          console.error(err);
-          await statusMsg.edit(`❌ **[Error Login]** Gagal login! Pastikan token akun BENAR dan belum kadaluwarsa (ambil ulang di browser).\n*Log: ${err.message}*`);
-        });
-
-      } catch (err) {
-        await statusMsg.edit(`❌ **[Error Fatal]** Terjadi kesalahan pada sistem: ${err.message}`);
-      }
-    });
-
-    collector.on('end', async () => {
-      if (!isImageCollected) {
-        await interaction.followUp({ content: '⏳ Waktu habis! Kamu tidak mengirimkan gambar tepat waktu.', ephemeral: true });
-      }
-    });
-  }
-});
-
-bot.login(BOT_TOKEN);              selfClient.destroy();
-            }
-          }
-        };
-
-        selfClient.on('ready', async () => {
-          console.log(`[SELFBOT] Login sebagai ${selfClient.user.tag}`);
-          await attemptSend(); 
-        });
-
-        selfClient.on('messageCreate', async msg => {
-          if (msg.channel.id === targetChannelId) await attemptSend();
-        });
-
-        selfClient.on('channelUpdate', async (oldCh, newCh) => {
-          if (newCh.id === targetChannelId) await attemptSend();
-        });
-
-        await selfClient.login(userToken);
-      } catch (err) {
-        await originChannel.send(`❌ **Gagal login akun user:** ${err.message}`);
-      }
-    });
-
-    // Menambahkan 'async' di sini untuk memperbaiki crash di baris 135
-    collector.on('end', async () => {
-      if (!isImageCollected) {
-        await interaction.followUp({ content: '⏳ Waktu habis! Anda tidak mengunggah gambar dalam waktu 60 detik.', ephemeral: true });
       }
     });
   }
