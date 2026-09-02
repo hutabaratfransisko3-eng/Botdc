@@ -18,10 +18,9 @@ const CLIENT_ID = process.env.CLIENT_ID;
 let userToken = process.env.USER_TOKEN || null;
 let targetChannelId = process.env.TARGET_CHANNEL_ID || null;
 
-// Variabel Penyimpan CS, Status, dan Channel Notifikasi
 let pendingCS = null;
 let isSent = false; 
-let originChannel = null; // Menyimpan channel tempat command dijalankan
+let originChannel = null;
 
 const bot = new BotClient({ 
   intents: [
@@ -48,7 +47,6 @@ const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
   }
 })();
 
-// --- SLASH COMMANDS ---
 bot.on('interactionCreate', async interaction => {
   if (interaction.isChatInputCommand()) {
     if (interaction.commandName === 'setakun') {
@@ -64,7 +62,6 @@ bot.on('interactionCreate', async interaction => {
         return interaction.reply({ content: '❌ Silakan set akun (`/setakun`) & channel (`/setchannelcs`) dulu!', ephemeral: true });
       }
 
-      // Reset status & simpan channel asal perintah
       isSent = false;
       originChannel = interaction.channel;
 
@@ -79,7 +76,6 @@ bot.on('interactionCreate', async interaction => {
     }
   }
 
-  // --- MODAL SUBMIT & KOLEKTOR GAMBAR ---
   if (interaction.isModalSubmit() && interaction.customId === 'csModal') {
     await interaction.deferReply({ ephemeral: true });
 
@@ -126,7 +122,7 @@ Tag : <@&1212085960418791464>`;
   }
 });
 
-// --- DETEKSI AUTOMATIS, PENGIRIMAN, & NOTIFIKASI JAM ---
+// Penambahan kata kunci `async` pada fungsi penanganan pesan
 bot.on('messageCreate', async message => {
   if (!pendingCS || isSent || message.channel.id !== targetChannelId) return;
 
@@ -147,7 +143,6 @@ bot.on('messageCreate', async message => {
           files: dataToSend.files
         });
 
-        // Ambil waktu eksekusi pengiriman (Format WIB / HH:MM:SS)
         const now = new Date();
         const timeString = now.toLocaleTimeString('id-ID', { 
           timeZone: 'Asia/Jakarta', 
@@ -158,7 +153,6 @@ bot.on('messageCreate', async message => {
 
         console.log(`[SUCCESS] CS dikirim pada jam ${timeString}`);
 
-        // Kirim notifikasi ke channel tempat perintah /kirimcs dijalankan
         if (originChannel) {
           await originChannel.send(`✅ **CS Berhasil dikirim pada jam ${timeString} WIB**`);
         }
@@ -173,31 +167,15 @@ bot.on('messageCreate', async message => {
       }
     });
 
-    await selfClient.login(userToken);
+    // Menangani promise login secara eksplisit
+    selfClient.login(userToken).catch(err => {
+      console.error('[ERROR] Selfbot login gagal:', err);
+      if (originChannel) {
+        originChannel.send(`❌ **Gagal login akun user:** ${err.message}`);
+      }
+    });
   } catch (err) {
-    console.error('[ERROR] Selfbot login gagal:', err);
-  }
-});
-
-bot.login(BOT_TOKEN);      const selfClient = new SelfbotClient();
-      
-      selfClient.on('ready', async () => {
-        try {
-          const channel = await selfClient.channels.fetch(targetChannelId);
-          await channel.send({ content: contentMessage, files: attachmentArray });
-
-          await interaction.editReply({ content: '🚀 CS Berhasil dikirimkan menggunakan akun Anda!' });
-          selfClient.destroy();
-        } catch (err) {
-          await interaction.editReply({ content: `❌ Gagal mengirim pesan: ${err.message}` });
-          selfClient.destroy();
-        }
-      });
-
-      await selfClient.login(userToken);
-    } catch (err) {
-      await interaction.editReply({ content: `❌ Token tidak valid / Gagal login: ${err.message}` });
-    }
+    console.error('[ERROR] Jalur eksekusi error:', err);
   }
 });
 
