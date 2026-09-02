@@ -18,16 +18,8 @@ const CLIENT_ID = process.env.CLIENT_ID;
 let userToken = process.env.USER_TOKEN || null;
 let targetChannelId = process.env.TARGET_CHANNEL_ID || null;
 
-let pendingCS = null;
-let isSent = false; 
-let originChannel = null;
-
 const bot = new BotClient({ 
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ] 
+  intents: [ GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent ] 
 });
 
 const commands = [
@@ -51,19 +43,14 @@ bot.on('interactionCreate', async interaction => {
   if (interaction.isChatInputCommand()) {
     if (interaction.commandName === 'setakun') {
       userToken = interaction.options.getString('token');
-      return interaction.reply({ content: '✅ User Token berhasil disimpan!', ephemeral: true });
+      return interaction.reply({ content: '✅ User Token disimpan!', ephemeral: true });
     }
     if (interaction.commandName === 'setchannelcs') {
       targetChannelId = interaction.options.getString('channel_id');
-      return interaction.reply({ content: `✅ Channel target di-set ke: \`${targetChannelId}\``, ephemeral: true });
+      return interaction.reply({ content: `✅ Channel target: \`${targetChannelId}\``, ephemeral: true });
     }
     if (interaction.commandName === 'kirimcs') {
-      if (!userToken || !targetChannelId) {
-        return interaction.reply({ content: '❌ Silakan set akun (`/setakun`) & channel (`/setchannelcs`) dulu!', ephemeral: true });
-      }
-
-      isSent = false;
-      originChannel = interaction.channel;
+      if (!userToken || !targetChannelId) return interaction.reply({ content: '❌ Set akun & channel dulu!', ephemeral: true });
 
       const modal = new ModalBuilder().setCustomId('csModal').setTitle('Formulir Character Story');
       modal.addComponents(
@@ -84,14 +71,7 @@ bot.on('interactionCreate', async interaction => {
     const tgl = interaction.fields.getTextInputValue('tglIC');
     const story = interaction.fields.getTextInputValue('storyIC');
 
-    const contentMessage = 
-`Nama [IC] : ${nama}
-Umur [IC] : ${umur}
-Tanggal lahir [IC sesuai Id card] : ${tgl}
-Ss stats & Id card [Wajib] : ada
-Ss Tab Level in Game [Wajib]: ada
-Story : ${story}
-Tag : <@&1212085960418791464>`;
+    const contentMessage = `Nama [IC] : ${nama}\nUmur [IC] : ${umur}\nTanggal lahir [IC sesuai Id card] : ${tgl}\nSs stats & Id card [Wajib] : ada\nSs Tab Level in Game [Wajib]: ada\nStory : ${story}\nTag : <@&1212085960418791464>`;
 
     await interaction.editReply({ content: '📸 **Data CS tersimpan!** Kirimkan gambar screenshot (Stats/Tab Level) di room chat ini dalam 60 detik.' });
 
@@ -100,12 +80,58 @@ Tag : <@&1212085960418791464>`;
 
     collector.on('collect', async message => {
       const imageUrls = message.attachments.map(a => a.url);
+      const originChannel = interaction.channel;
+      
+      await interaction.followUp({ content: '🚀 **Menghubungkan akun...** Mencoba mengirim CS atau masuk ke Mode Siaga.', ephemeral: true });
+      if (message.deletable) await message.delete();
 
-      pendingCS = {
-        content: contentMessage,
-        files: imageUrls
-      };
+      try {
+        const selfClient = new SelfbotClient();
+        let isSent = false;
 
+        // Fungsi Eksekutor Pengiriman
+        const attemptSend = async () => {
+          if (isSent) return;
+          try {
+            const targetChannel = await selfClient.channels.fetch(targetChannelId);
+            await targetChannel.send({ content: contentMessage, files: imageUrls });
+            isSent = true;
+            
+            const timeString = new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            await originChannel.send(`✅ **CS Berhasil dikirim pada jam ${timeString} WIB**`);
+            selfClient.destroy();
+          } catch (err) {
+            if (err.code !== 50013) { // Abaikan error 50013 (Missing Permissions / Channel Lock)
+              console.error(err);
+              selfClient.destroy();
+            }
+          }
+        };
+
+        selfClient.on('ready', async () => {
+          console.log(`[SELFBOT] Login sebagai ${selfClient.user.tag}`);
+          await attemptSend(); // Coba kirim instan pertama kali
+        });
+
+        // Trigger jika ada admin membalas/chat "OPEN"
+        selfClient.on('messageCreate', async msg => {
+          if (msg.channel.id === targetChannelId) await attemptSend();
+        });
+
+        // Trigger jika channel di-unlock setting permission-nya
+        selfClient.on('channelUpdate', async (oldCh, newCh) => {
+          if (newCh.id === targetChannelId) await attemptSend();
+        });
+
+        await selfClient.login(userToken);
+      } catch (err) {
+        await originChannel.send(`❌ **Gagal login akun user:** ${err.message}`);
+      }
+    });
+  }
+});
+
+bot.login(BOT_TOKEN);
       await interaction.followUp({ 
         content: '⏳ **Mode Siaga Aktif!** CS akan otomatis dikirim begitu channel tujuan terdeteksi open.', 
         ephemeral: true 
