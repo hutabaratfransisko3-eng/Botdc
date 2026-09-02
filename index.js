@@ -77,8 +77,11 @@ bot.on('interactionCreate', async interaction => {
 
     const filter = m => m.author.id === interaction.user.id && m.attachments.size > 0;
     const collector = interaction.channel.createMessageCollector({ filter, time: 60000, max: 1 });
+    
+    let isImageCollected = false;
 
     collector.on('collect', async message => {
+      isImageCollected = true;
       const imageUrls = message.attachments.map(a => a.url);
       const originChannel = interaction.channel;
       
@@ -89,7 +92,6 @@ bot.on('interactionCreate', async interaction => {
         const selfClient = new SelfbotClient();
         let isSent = false;
 
-        // Fungsi Eksekutor Pengiriman
         const attemptSend = async () => {
           if (isSent) return;
           try {
@@ -101,7 +103,7 @@ bot.on('interactionCreate', async interaction => {
             await originChannel.send(`✅ **CS Berhasil dikirim pada jam ${timeString} WIB**`);
             selfClient.destroy();
           } catch (err) {
-            if (err.code !== 50013) { // Abaikan error 50013 (Missing Permissions / Channel Lock)
+            if (err.code !== 50013) { 
               console.error(err);
               selfClient.destroy();
             }
@@ -110,15 +112,13 @@ bot.on('interactionCreate', async interaction => {
 
         selfClient.on('ready', async () => {
           console.log(`[SELFBOT] Login sebagai ${selfClient.user.tag}`);
-          await attemptSend(); // Coba kirim instan pertama kali
+          await attemptSend(); 
         });
 
-        // Trigger jika ada admin membalas/chat "OPEN"
         selfClient.on('messageCreate', async msg => {
           if (msg.channel.id === targetChannelId) await attemptSend();
         });
 
-        // Trigger jika channel di-unlock setting permission-nya
         selfClient.on('channelUpdate', async (oldCh, newCh) => {
           if (newCh.id === targetChannelId) await attemptSend();
         });
@@ -128,80 +128,13 @@ bot.on('interactionCreate', async interaction => {
         await originChannel.send(`❌ **Gagal login akun user:** ${err.message}`);
       }
     });
-  }
-});
 
-bot.login(BOT_TOKEN);
-      await interaction.followUp({ 
-        content: '⏳ **Mode Siaga Aktif!** CS akan otomatis dikirim begitu channel tujuan terdeteksi open.', 
-        ephemeral: true 
-      });
-
-      if (message.deletable) await message.delete();
-    });
-
-    collector.on('end', collected => {
-      if (collected.size === 0 && !pendingCS) {
-        interaction.followUp({ content: '⏳ Waktu habis! Anda tidak mengunggah gambar.', ephemeral: true });
+    // Menambahkan 'async' di sini untuk memperbaiki crash di baris 135
+    collector.on('end', async () => {
+      if (!isImageCollected) {
+        await interaction.followUp({ content: '⏳ Waktu habis! Anda tidak mengunggah gambar dalam waktu 60 detik.', ephemeral: true });
       }
     });
-  }
-});
-
-// Penambahan kata kunci `async` pada fungsi penanganan pesan
-bot.on('messageCreate', async message => {
-  if (!pendingCS || isSent || message.channel.id !== targetChannelId) return;
-
-  isSent = true; 
-  console.log('[AUTO-SEND] Memulai pengiriman cepat...');
-
-  const dataToSend = { ...pendingCS };
-  pendingCS = null; 
-
-  try {
-    const selfClient = new SelfbotClient();
-
-    selfClient.on('ready', async () => {
-      try {
-        const targetChannel = await selfClient.channels.fetch(targetChannelId);
-        await targetChannel.send({
-          content: dataToSend.content,
-          files: dataToSend.files
-        });
-
-        const now = new Date();
-        const timeString = now.toLocaleTimeString('id-ID', { 
-          timeZone: 'Asia/Jakarta', 
-          hour: '2-digit', 
-          minute: '2-digit', 
-          second: '2-digit' 
-        });
-
-        console.log(`[SUCCESS] CS dikirim pada jam ${timeString}`);
-
-        if (originChannel) {
-          await originChannel.send(`✅ **CS Berhasil dikirim pada jam ${timeString} WIB**`);
-        }
-
-        selfClient.destroy();
-      } catch (err) {
-        console.error('[ERROR] Selfbot gagal mengirim:', err);
-        if (originChannel) {
-          await originChannel.send(`❌ **Gagal mengirim CS:** ${err.message}`);
-        }
-        selfClient.destroy();
-      }
-    });
-
-    // Menangani promise login secara eksplisit
-    selfClient.login(userToken).catch(err => {
-      console.error('[ERROR] Selfbot login gagal:', err);
-      if (originChannel) {
-        originChannel.send(`❌ **Gagal login akun user:** ${err.message}`);
-      }
-    });
-  } catch (err) {
-    console.error('[ERROR] Jalur eksekusi error:', err);
   }
 });
 
