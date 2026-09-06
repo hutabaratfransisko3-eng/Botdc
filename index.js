@@ -56,7 +56,7 @@ async function registerCommands(clientId) {
     }
 }
 
-// Fungsi kirim pesan via User API
+// Fungsi kirim pesan sekaligus pengecek status API murni (Tanpa butuh Bot)
 async function sendAsUser(channelId, content) {
     try {
         await axios.post(
@@ -72,9 +72,12 @@ async function sendAsUser(channelId, content) {
         );
         return { success: true };
     } catch (error) {
-        const errorData = error.response ? error.response.data : error.message;
-        console.error("[RAILWAY LOG ERROR]", JSON.stringify(errorData));
-        return { success: false };
+        return { 
+            success: false, 
+            status: error.response?.status,
+            code: error.response?.data?.code,
+            data: error.response?.data
+        };
     }
 }
 
@@ -82,54 +85,54 @@ async function processQueue() {
     if (isProcessing || messageQueue.length === 0 || !targetChannelId) return;
 
     isProcessing = true;
-    const targetChannel = client.channels.cache.get(targetChannelId);
-    
-    if (!targetChannel) {
-        console.log(`[RAILWAY LOG] Bot tidak bisa melihat channel target ID: ${targetChannelId}`);
-        isProcessing = false;
-        return; 
-    }
-
-    const canSend = targetChannel.permissionsFor(targetChannel.guild.id).has('SendMessages');
-
-    if (!canSend) {
-        if (!isStandby) {
-            isStandby = true;
-            console.log(`[RAILWAY LOG] Channel ${targetChannelId} tertutup. Mode Siaga Aktif.`);
-            if (operatorChannelId) {
-                const opChannel = client.channels.cache.get(operatorChannelId);
-                if (opChannel) opChannel.send(`⚠️ **Mode Siaga Aktif:** Channel <#${targetChannelId}> dikunci. Pesan disimpan dalam antrean.`);
-            }
-        }
-        isProcessing = false;
-        return; 
-    }
-
-    isStandby = false;
     let successCount = 0;
 
     while (messageQueue.length > 0) {
         const msgContent = messageQueue[0]; 
+        
+        // Akun User langsung mencoba menembak pesan ke server target
         const result = await sendAsUser(targetChannelId, msgContent);
         
         if (result.success) {
+            isStandby = false;
             messageQueue.shift();
             successCount++;
             
+            // Jeda aman antar pesan
             if (messageQueue.length > 0) {
-                const randomDelay = Math.floor(Math.random() * 1000) + 2000;
-                await sleep(randomDelay);
+                await sleep(1500);
             }
         } else {
-            console.log(`[RAILWAY LOG] Gagal mengirim pesan ke target. Proses antrean dihentikan sementara.`);
-            break; 
+            // Cek jika error karena channel belum dibuka / dikunci (Missing Permissions / Access)
+            if (result.status === 403 || result.code === 50013 || result.code === 50001) {
+                if (!isStandby) {
+                    isStandby = true;
+                    console.log(`[RAILWAY LOG] Channel target dikunci. Masuk Mode Siaga.`);
+                    if (operatorChannelId) {
+                        const opChannel = client.channels.cache.get(operatorChannelId);
+                        if (opChannel) opChannel.send(`⚠️ **Mode Siaga Aktif:** Channel <#${targetChannelId}> belum dibuka. Akun Anda bersiaga untuk menembakkan pesan saat jadwalnya buka!`);
+                    }
+                }
+            } 
+            else if (result.status === 401) {
+                console.log(`[RAILWAY LOG] Token User Tidak Sah.`);
+                if (operatorChannelId && !isStandby) {
+                    const opChannel = client.channels.cache.get(operatorChannelId);
+                    if (opChannel) opChannel.send(`❌ **Gagal Kritis:** Token User Anda sudah kadaluarsa (401 Unauthorized).`);
+                    isStandby = true;
+                }
+            } 
+            else {
+                console.log(`[RAILWAY LOG ERROR]`, JSON.stringify(result.data));
+            }
+            break; // Hentikan loop dan coba lagi di interval berikutnya
         }
     }
 
     if (successCount > 0 && operatorChannelId) {
         const opChannel = client.channels.cache.get(operatorChannelId);
         if (opChannel) {
-            opChannel.send(`✅ **Berhasil:** ${successCount} pesan berhasil dikirim ke <#${targetChannelId}>!`);
+            opChannel.send(`✅ **Cepat Tanggap:** ${successCount} pesan berhasil tertembak otomatis ke channel target!`);
         }
     }
 
@@ -139,7 +142,9 @@ async function processQueue() {
 client.on('ready', async () => {
     console.log(`Bot pengelola aktif sebagai ${client.user.tag}`);
     await registerCommands(client.user.id);
-    setInterval(processQueue, 5000);
+    
+    // Interval dibikin cepat (3.5 detik) agar langsung tertembak saat admin target buka channel
+    setInterval(processQueue, 3500);
 });
 
 client.on('interactionCreate', async interaction => {
@@ -152,7 +157,8 @@ client.on('interactionCreate', async interaction => {
     }
     else if (commandName === 'settarget') {
         targetChannelId = interaction.options.getString('channel_id');
-        await interaction.reply({ content: `✅ Channel target diatur ke: <#${targetChannelId}>` });
+        isStandby = false; // Reset siaga saat ganti target
+        await interaction.reply({ content: `✅ Channel target diatur ke ID: \`${targetChannelId}\`` });
     }
     else if (commandName === 'startkirim') {
         if (!operatorChannelId) return interaction.reply({ content: "❌ Setel channel operator dulu pakai `/setchoperator`", flags: 64 });
@@ -172,7 +178,7 @@ client.on('interactionCreate', async interaction => {
             if (!finalContent) return interaction.reply({ content: "❌ Pesan tersebut kosong!", flags: 64 });
 
             messageQueue.push(finalContent);
-            await interaction.reply({ content: `⏳ Pesan ditambahkan ke antrean. Memproses...`, flags: 64 });
+            await interaction.reply({ content: `⏳ Pesan disiapkan... Sedang mengeksekusi penembakan.`, flags: 64 });
             processQueue();
 
         } catch (err) {
@@ -204,18 +210,12 @@ client.on('messageCreate', async message => {
             if (!finalContent) return message.reply("❌ Pesan tersebut kosong.");
 
             messageQueue.push(finalContent);
-            message.reply("⏳ Pesan ditambahkan ke antrean. Memproses...");
+            message.reply("⏳ Pesan disiapkan... Sedang mengeksekusi penembakan.");
             processQueue();
 
         } catch (err) {
             message.reply("❌ Gagal mengambil pesan yang di-reply.");
         }
-    }
-});
-
-client.on('channelUpdate', (oldChannel, newChannel) => {
-    if (newChannel.id === targetChannelId) {
-        processQueue(); 
     }
 });
 
