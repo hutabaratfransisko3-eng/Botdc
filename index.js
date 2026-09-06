@@ -1,5 +1,6 @@
 const { Client, GatewayIntentBits, Partials, REST, Routes, SlashCommandBuilder } = require('discord.js');
 const axios = require('axios');
+const WebSocket = require('ws'); // Modul baru untuk titik hijau
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const USER_TOKEN = process.env.USER_TOKEN;
@@ -22,9 +23,6 @@ let operatorChannelId = null;
 let targetChannelId = null;
 let messageQueue = [];
 let isStandby = false;
-let isProcessing = false;
-
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 const commands = [
     new SlashCommandBuilder()
@@ -56,7 +54,70 @@ async function registerCommands(clientId) {
     }
 }
 
-// Fungsi kirim pesan sekaligus pengecek status API murni (Tanpa butuh Bot)
+// ---------------------------------------------------------
+// FUNGSI GATEWAY WEBSOCKET (MENYALAKAN TITIK HIJAU AKUN)
+// ---------------------------------------------------------
+function keepUserOnline() {
+    const ws = new WebSocket('wss://gateway.discord.gg/?v=10&encoding=json');
+    let heartbeatInterval = 0;
+
+    ws.on('open', () => {
+        console.log('[USER GATEWAY] Menghubungkan titik hijau akun User...');
+    });
+
+    ws.on('message', (data) => {
+        const payload = JSON.parse(data);
+        const { t, op, d } = payload;
+
+        // Merespon detak jantung (heartbeat) dari Discord agar tidak diputus
+        if (op === 10) {
+            const { heartbeat_interval } = d;
+            heartbeatInterval = setInterval(() => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ op: 1, d: null }));
+                }
+            }, heartbeat_interval);
+
+            // Mengirim identifikasi untuk memunculkan status Online
+            ws.send(JSON.stringify({
+                op: 2,
+                d: {
+                    token: USER_TOKEN,
+                    capabilities: 16381,
+                    properties: {
+                        os: 'Windows',
+                        browser: 'Chrome',
+                        device: '',
+                    },
+                    presence: {
+                        status: 'online',
+                        since: 0,
+                        activities: [],
+                        afk: false
+                    }
+                }
+            }));
+        }
+
+        if (t === 'READY') {
+            console.log('[USER GATEWAY] ✅ Titik Hijau Akun User Aktif!');
+        }
+    });
+
+    ws.on('close', () => {
+        console.log('[USER GATEWAY] Koneksi terputus. Mencoba reconnect...');
+        clearInterval(heartbeatInterval);
+        setTimeout(keepUserOnline, 5000);
+    });
+    
+    ws.on('error', (err) => {
+        console.error('[USER GATEWAY ERROR]', err.message);
+    });
+}
+
+// ---------------------------------------------------------
+// FUNGSI PENEMBAK PESAN (AXIOS)
+// ---------------------------------------------------------
 async function sendAsUser(channelId, content) {
     try {
         await axios.post(
@@ -82,69 +143,47 @@ async function sendAsUser(channelId, content) {
 }
 
 async function processQueue() {
-    if (isProcessing || messageQueue.length === 0 || !targetChannelId) return;
+    if (messageQueue.length === 0 || !targetChannelId) return;
 
-    isProcessing = true;
-    let successCount = 0;
-
-    while (messageQueue.length > 0) {
-        const msgContent = messageQueue[0]; 
+    const msgContent = messageQueue[0]; 
+    const result = await sendAsUser(targetChannelId, msgContent);
+    
+    if (result.success) {
+        messageQueue.shift(); 
+        isStandby = false;
         
-        // Akun User langsung mencoba menembak pesan ke server target
-        const result = await sendAsUser(targetChannelId, msgContent);
-        
-        if (result.success) {
-            isStandby = false;
-            messageQueue.shift();
-            successCount++;
-            
-            // Jeda aman antar pesan
-            if (messageQueue.length > 0) {
-                await sleep(1500);
-            }
-        } else {
-            // Cek jika error karena channel belum dibuka / dikunci (Missing Permissions / Access)
-            if (result.status === 403 || result.code === 50013 || result.code === 50001) {
-                if (!isStandby) {
-                    isStandby = true;
-                    console.log(`[RAILWAY LOG] Channel target dikunci. Masuk Mode Siaga.`);
-                    if (operatorChannelId) {
-                        const opChannel = client.channels.cache.get(operatorChannelId);
-                        if (opChannel) opChannel.send(`⚠️ **Mode Siaga Aktif:** Channel <#${targetChannelId}> belum dibuka. Akun Anda bersiaga untuk menembakkan pesan saat jadwalnya buka!`);
-                    }
-                }
-            } 
-            else if (result.status === 401) {
-                console.log(`[RAILWAY LOG] Token User Tidak Sah.`);
-                if (operatorChannelId && !isStandby) {
+        if (operatorChannelId) {
+            const opChannel = client.channels.cache.get(operatorChannelId);
+            if (opChannel) opChannel.send(`✅ **TARGET TERTEMBUS:** Pesan otomatis terkirim ke target!`);
+        }
+    } else {
+        if (result.status === 403 || result.code === 50013 || result.code === 50001 || result.code === 50009) {
+            if (!isStandby) {
+                isStandby = true;
+                if (operatorChannelId) {
                     const opChannel = client.channels.cache.get(operatorChannelId);
-                    if (opChannel) opChannel.send(`❌ **Gagal Kritis:** Token User Anda sudah kadaluarsa (401 Unauthorized).`);
-                    isStandby = true;
+                    if (opChannel) opChannel.send(`⚠️ **Mode Siaga Aktif:** Channel <#${targetChannelId}> belum dibuka. Bot terus memantau dan siap menembak!`);
                 }
-            } 
-            else {
-                console.log(`[RAILWAY LOG ERROR]`, JSON.stringify(result.data));
             }
-            break; // Hentikan loop dan coba lagi di interval berikutnya
+        } 
+        else if (result.status === 401) {
+            if (operatorChannelId && !isStandby) {
+                const opChannel = client.channels.cache.get(operatorChannelId);
+                if (opChannel) opChannel.send(`❌ **Gagal Kritis:** Token User Anda sudah kadaluarsa (401).`);
+                isStandby = true;
+            }
+        } 
+        else {
+            console.log(`[RAILWAY LOG ERROR]`, JSON.stringify(result.data || "Unknown Error"));
         }
     }
-
-    if (successCount > 0 && operatorChannelId) {
-        const opChannel = client.channels.cache.get(operatorChannelId);
-        if (opChannel) {
-            opChannel.send(`✅ **Cepat Tanggap:** ${successCount} pesan berhasil tertembak otomatis ke channel target!`);
-        }
-    }
-
-    isProcessing = false;
 }
 
 client.on('ready', async () => {
     console.log(`Bot pengelola aktif sebagai ${client.user.tag}`);
     await registerCommands(client.user.id);
     
-    // Interval dibikin cepat (3.5 detik) agar langsung tertembak saat admin target buka channel
-    setInterval(processQueue, 3500);
+    setInterval(processQueue, 3000);
 });
 
 client.on('interactionCreate', async interaction => {
@@ -157,7 +196,7 @@ client.on('interactionCreate', async interaction => {
     }
     else if (commandName === 'settarget') {
         targetChannelId = interaction.options.getString('channel_id');
-        isStandby = false; // Reset siaga saat ganti target
+        isStandby = false; 
         await interaction.reply({ content: `✅ Channel target diatur ke ID: \`${targetChannelId}\`` });
     }
     else if (commandName === 'startkirim') {
@@ -178,7 +217,7 @@ client.on('interactionCreate', async interaction => {
             if (!finalContent) return interaction.reply({ content: "❌ Pesan tersebut kosong!", flags: 64 });
 
             messageQueue.push(finalContent);
-            await interaction.reply({ content: `⏳ Pesan disiapkan... Sedang mengeksekusi penembakan.`, flags: 64 });
+            await interaction.reply({ content: `⏳ Peluru disiapkan... Radar penembak diaktifkan.`, flags: 64 });
             processQueue();
 
         } catch (err) {
@@ -210,7 +249,7 @@ client.on('messageCreate', async message => {
             if (!finalContent) return message.reply("❌ Pesan tersebut kosong.");
 
             messageQueue.push(finalContent);
-            message.reply("⏳ Pesan disiapkan... Sedang mengeksekusi penembakan.");
+            message.reply("⏳ Peluru disiapkan... Radar penembak diaktifkan.");
             processQueue();
 
         } catch (err) {
@@ -219,4 +258,6 @@ client.on('messageCreate', async message => {
     }
 });
 
+// Menjalankan koneksi WebSocket untuk titik hijau sebelum Bot login
+keepUserOnline();
 client.login(BOT_TOKEN);
