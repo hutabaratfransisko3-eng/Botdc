@@ -1,16 +1,17 @@
 {
   "name": "bot-forwarder-siaga",
   "version": "1.0.0",
-  "description": "Bot discord untuk meneruskan pesan menggunakan akun user dengan mode siaga",
+  "description": "Bot discord untuk meneruskan pesan dengan fitur titik hijau",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "axios": "^1.6.7",
-    "discord.js": "^14.14.1"
+    "discord.js": "^14.14.1",
+    "ws": "^8.16.0"
   },
   "engines": {
-    "node": ">=16.9.0"
+    "node": ">=18.0.0"
   }
 }
