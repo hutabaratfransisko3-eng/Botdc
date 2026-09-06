@@ -1,12 +1,11 @@
-const { Client, GatewayIntentBits, Partials } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, REST, Routes, SlashCommandBuilder } = require('discord.js');
 const axios = require('axios');
 
-// Mengambil token dari Environment Variables Railway
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const USER_TOKEN = process.env.USER_TOKEN;
 
 if (!BOT_TOKEN || !USER_TOKEN) {
-    console.error("FATAL ERROR: BOT_TOKEN atau USER_TOKEN belum diatur di Environment Variables!");
+    console.error("FATAL ERROR: BOT_TOKEN atau USER_TOKEN belum diatur!");
     process.exit(1);
 }
 
@@ -19,19 +18,49 @@ const client = new Client({
     partials: [Partials.Message, Partials.Channel, Partials.Reaction]
 });
 
-// Database Sementara (Akan reset jika server/Railway direstart)
 let operatorChannelId = null;
 let targetChannelId = null;
 let messageQueue = [];
 let isStandby = false;
 
-// Fungsi untuk mengirim pesan sebagai User Account
+const commands = [
+    new SlashCommandBuilder()
+        .setName('setchoperator')
+        .setDescription('Mengatur channel ini sebagai channel operator bot'),
+    new SlashCommandBuilder()
+        .setName('settarget')
+        .setDescription('Mengatur channel target pengiriman')
+        .addStringOption(option => 
+            option.setName('channel_id')
+                .setDescription('ID Channel Tujuan')
+                .setRequired(true)),
+    new SlashCommandBuilder()
+        .setName('startkirim')
+        .setDescription('Meneruskan pesan yang di-reply ke channel target')
+].map(command => command.toJSON());
+
+async function registerCommands(clientId) {
+    const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
+    try {
+        await rest.put(Routes.applicationCommands(clientId), { body: commands });
+        console.log('Slash Commands berhasil terdaftar!');
+    } catch (error) {
+        console.error('Gagal mendaftarkan Slash Commands:', error);
+    }
+}
+
 async function sendAsUser(channelId, content) {
     try {
         await axios.post(
             `https://discord.com/api/v10/channels/${channelId}/messages`,
             { content: content },
-            { headers: { 'Authorization': USER_TOKEN, 'Content-Type': 'application/json' } }
+            { 
+                headers: { 
+                    'Authorization': USER_TOKEN, 
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                } 
+            }
         );
         return true;
     } catch (error) {
@@ -40,14 +69,20 @@ async function sendAsUser(channelId, content) {
     }
 }
 
-// Fungsi untuk memproses antrean pesan
 async function processQueue() {
     if (messageQueue.length === 0 || !targetChannelId) return;
 
     const targetChannel = client.channels.cache.get(targetChannelId);
-    if (!targetChannel) return;
+    
+    // ERROR HANDLING BARU: Jika Bot tidak bisa melihat channel target
+    if (!targetChannel) {
+        if (operatorChannelId) {
+            const opChannel = client.channels.cache.get(operatorChannelId);
+            if (opChannel) opChannel.send(`❌ **Error Kritis:** Bot pengelola tidak bisa melihat channel target <#${targetChannelId}>. Pastikan Bot sudah diundang ke server target dan memiliki izin View Channel!`);
+        }
+        return; 
+    }
 
-    // Cek apakah channel terbuka (memiliki izin SEND_MESSAGES untuk everyone/role default)
     const canSend = targetChannel.permissionsFor(targetChannel.guild.id).has('SendMessages');
 
     if (!canSend) {
@@ -55,13 +90,12 @@ async function processQueue() {
             isStandby = true;
             if (operatorChannelId) {
                 const opChannel = client.channels.cache.get(operatorChannelId);
-                if (opChannel) opChannel.send("⚠️ **Mode Siaga Aktif:** Chanel target belum dibuka. Pesan masuk antrean.");
+                if (opChannel) opChannel.send(`⚠️ **Mode Siaga Aktif:** Chanel <#${targetChannelId}> masih terkunci. Pesan ditahan di antrean.`);
             }
         }
         return; 
     }
 
-    // Jika channel terbuka, kirim semua antrean
     isStandby = false;
     let successCount = 0;
 
@@ -70,42 +104,88 @@ async function processQueue() {
         const success = await sendAsUser(targetChannelId, msgContent);
         
         if (success) {
-            messageQueue.shift(); // Hapus dari antrean jika berhasil
+            messageQueue.shift();
             successCount++;
         } else {
-            break; // Jika gagal (rate limit dll), berhenti sejenak
+            // Jika gagal karena API Error, hentikan loop agar tidak terhapus dari antrean
+            if (operatorChannelId) {
+                const opChannel = client.channels.cache.get(operatorChannelId);
+                if (opChannel) opChannel.send(`❌ **Gagal:** Token User ditolak oleh Discord API. Cek log Railway Anda.`);
+            }
+            break;
         }
     }
 
     if (successCount > 0 && operatorChannelId) {
         const opChannel = client.channels.cache.get(operatorChannelId);
         if (opChannel) {
-            opChannel.send(`✅ **Berhasil:** ${successCount} pesan dari antrean telah berhasil dikirim otomatis!`);
+            opChannel.send(`✅ **Berhasil:** ${successCount} pesan telah dikirim oleh akun User Anda!`);
         }
     }
 }
 
-client.on('ready', () => {
+client.on('ready', async () => {
     console.log(`Bot pengelola aktif sebagai ${client.user.tag}`);
-    // Mengecek antrean setiap 5 detik
+    await registerCommands(client.user.id);
     setInterval(processQueue, 5000);
 });
 
-client.on('messageCreate', async (message) => {
-    if (message.author.bot) return;
+client.on('interactionCreate', async interaction => {
+    if (!interaction.isChatInputCommand()) return;
+    const { commandName } = interaction;
 
-    if (message.content.startsWith('/setchoperator')) {
-        operatorChannelId = message.channel.id;
-        return message.reply(`✅ Chanel ini telah diatur sebagai **Chanel Operator**.`);
+    if (commandName === 'setchoperator') {
+        operatorChannelId = interaction.channelId;
+        await interaction.reply(`✅ Chanel ini telah diatur sebagai **Chanel Operator**.`);
     }
 
-    if (message.content.startsWith('/settarget')) {
-        const args = message.content.split(' ');
-        if (!args[1]) return message.reply("❌ Masukkan ID Chanel! Contoh: `/settarget 1234567890`");
+    else if (commandName === 'settarget') {
+        const chId = interaction.options.getString('channel_id');
+        targetChannelId = chId;
+        await interaction.reply(`✅ Chanel target pengiriman diatur ke: <#${targetChannelId}>`);
+    }
+
+    else if (commandName === 'startkirim') {
+        if (!operatorChannelId) return interaction.reply({ content: "❌ Setel Chanel Operator terlebih dahulu dengan `/setchoperator`", ephemeral: true });
+        if (!targetChannelId) return interaction.reply({ content: "❌ Setel Chanel Target terlebih dahulu dengan `/settarget`", ephemeral: true });
+
+        const channel = interaction.channel;
+        const messages = await channel.messages.fetch({ limit: 2 });
+        const lastMsg = messages.first(); 
         
-        targetChannelId = args[1];
-        return message.reply(`✅ Chanel target pengiriman diatur ke: <#${targetChannelId}>`);
+        let targetMsg = null;
+        if (interaction.message?.reference) {
+            targetMsg = await channel.messages.fetch(interaction.message.reference.messageId);
+        } else {
+            const fetched = await channel.messages.fetch(lastMsg.id);
+            if (fetched.reference) {
+                targetMsg = await channel.messages.fetch(fetched.reference.messageId);
+            }
+        }
+
+        if (!targetMsg) return interaction.reply({ content: "❌ Anda harus mereply/balas pesan yang ingin dikirim lalu jalankan `/startkirim`.", ephemeral: true });
+
+        let finalContent = targetMsg.content || "";
+        if (targetMsg.attachments.size > 0) {
+            const attachmentUrls = targetMsg.attachments.map(a => a.url).join('\n');
+            finalContent += `\n${attachmentUrls}`; 
+        }
+
+        if (!finalContent) return interaction.reply({ content: "❌ Pesan kosong.", ephemeral: true });
+
+        messageQueue.push(finalContent);
+        await interaction.reply("⏳ Pesan dimasukkan ke sistem. Sedang mengecek status channel...");
+        await processQueue();
     }
+});
+
+client.on('channelUpdate', (oldChannel, newChannel) => {
+    if (newChannel.id === targetChannelId) {
+        processQueue(); 
+    }
+});
+
+client.login(BOT_TOKEN);    }
 
     if (message.content.startsWith('/startkirim')) {
         if (!operatorChannelId) return message.reply("❌ Setel Chanel Operator terlebih dahulu dengan `/setchoperator`");
