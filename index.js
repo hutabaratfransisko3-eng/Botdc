@@ -1,6 +1,5 @@
 const { Client, GatewayIntentBits, Partials, REST, Routes, SlashCommandBuilder } = require('discord.js');
 const axios = require('axios');
-const WebSocket = require('ws');
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const USER_TOKEN = process.env.USER_TOKEN;
@@ -54,98 +53,7 @@ async function registerCommands(clientId) {
     }
 }
 
-// ---------------------------------------------------------
-// PERBAIKAN GATEWAY WEBSOCKET (TITIK HIJAU STABIL)
-// ---------------------------------------------------------
-function keepUserOnline() {
-    const ws = new WebSocket('wss://gateway.discord.gg/?v=10&encoding=json');
-    let heartbeatInterval = 0;
-    let seq = null; // Melacak sequence agar tidak di-kick oleh Discord
-
-    ws.on('open', () => {
-        console.log('[USER GATEWAY] Menghubungkan titik hijau...');
-    });
-
-    ws.on('message', (data) => {
-        const payload = JSON.parse(data);
-        const { t, op, d, s } = payload;
-
-        // Simpan sequence number jika ada
-        if (s !== undefined && s !== null) {
-            seq = s;
-        }
-
-        if (op === 10) { // OP 10: Hello
-            const { heartbeat_interval } = d;
-            
-            // Bypass identifikasi dengan penyamaran browser penuh
-            ws.send(JSON.stringify({
-                op: 2,
-                d: {
-                    token: USER_TOKEN,
-                    capabilities: 16381,
-                    properties: {
-                        os: 'Windows',
-                        browser: 'Chrome',
-                        device: '',
-                        system_locale: 'en-US',
-                        browser_user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                        browser_version: '120.0.0.0',
-                        os_version: '10',
-                        referrer: '',
-                        referring_domain: '',
-                        referrer_current: '',
-                        referring_domain_current: '',
-                        release_channel: 'stable',
-                        client_build_number: 250000,
-                        client_event_source: null
-                    },
-                    presence: {
-                        status: 'online',
-                        since: 0,
-                        activities: [],
-                        afk: false
-                    },
-                    compress: false,
-                    client_state: {
-                        guild_versions: {},
-                        highest_last_message_id: '0',
-                        read_state_version: 0,
-                        user_guild_settings_version: -1,
-                        user_settings_version: -1,
-                        private_channels_version: '0',
-                        api_code_version: 0
-                    }
-                }
-            }));
-
-            // Mulai Heartbeat menggunakan sequence terakhir
-            heartbeatInterval = setInterval(() => {
-                if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({ op: 1, d: seq }));
-                }
-            }, heartbeat_interval);
-        }
-
-        if (t === 'READY') {
-            console.log('[USER GATEWAY] ✅ Titik Hijau Akun User Aktif!');
-        }
-    });
-
-    ws.on('close', (code) => {
-        console.log(`[USER GATEWAY] Koneksi terputus (Kode: ${code}). Reconnect dalam 5 detik...`);
-        clearInterval(heartbeatInterval);
-        setTimeout(keepUserOnline, 5000);
-    });
-    
-    ws.on('error', (err) => {
-        console.error('[USER GATEWAY ERROR]', err.message);
-    });
-}
-
-// ---------------------------------------------------------
-// FUNGSI PENEMBAK PESAN
-// ---------------------------------------------------------
+// Fungsi penembak pesan murni via User API
 async function sendAsUser(channelId, content) {
     try {
         await axios.post(
@@ -170,6 +78,7 @@ async function sendAsUser(channelId, content) {
     }
 }
 
+// Sistem Polling Anti-Macet
 async function processQueue() {
     if (messageQueue.length === 0 || !targetChannelId) return;
 
@@ -197,7 +106,7 @@ async function processQueue() {
         else if (result.status === 401) {
             if (operatorChannelId && !isStandby) {
                 const opChannel = client.channels.cache.get(operatorChannelId);
-                if (opChannel) opChannel.send(`❌ **Gagal Kritis:** Token User Anda sudah kadaluarsa (401).`);
+                if (opChannel) opChannel.send(`❌ **Gagal Kritis:** Token User Anda tidak sah atau kadaluarsa (401).`);
                 isStandby = true;
             }
         } 
@@ -285,6 +194,4 @@ client.on('messageCreate', async message => {
     }
 });
 
-// Mulai WebSocket
-keepUserOnline();
 client.login(BOT_TOKEN);
