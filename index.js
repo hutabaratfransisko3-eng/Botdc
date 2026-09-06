@@ -1,123 +1,148 @@
-const { Client } = require('discord.js-selfbot-v13');
+const { Client, GatewayIntentBits, Partials } = require('discord.js');
+const axios = require('axios');
 
-const USER_TOKEN = process.env.USER_TOKEN ? process.env.USER_TOKEN.replace(/['"]/g, '').trim() : null;
-const TARGET_CHANNEL_ID = process.env.TARGET_CHANNEL_ID ? process.env.TARGET_CHANNEL_ID.replace(/['"]/g, '').trim() : null;
+// Mengambil token dari Environment Variables Railway
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const USER_TOKEN = process.env.USER_TOKEN;
 
-if (!USER_TOKEN || !TARGET_CHANNEL_ID) {
-  console.error('❌ Set USER_TOKEN dan TARGET_CHANNEL_ID di Environment Railway!');
-  process.exit(1);
+if (!BOT_TOKEN || !USER_TOKEN) {
+    console.error("FATAL ERROR: BOT_TOKEN atau USER_TOKEN belum diatur di Environment Variables!");
+    process.exit(1);
 }
 
-const client = new Client({ checkUpdate: false });
+const client = new Client({
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+    ],
+    partials: [Partials.Message, Partials.Channel, Partials.Reaction]
+});
 
-let pendingCS = null;
-let isSent = false;
+// Database Sementara (Akan reset jika server/Railway direstart)
+let operatorChannelId = null;
+let targetChannelId = null;
+let messageQueue = [];
+let isStandby = false;
+
+// Fungsi untuk mengirim pesan sebagai User Account
+async function sendAsUser(channelId, content) {
+    try {
+        await axios.post(
+            `https://discord.com/api/v10/channels/${channelId}/messages`,
+            { content: content },
+            { headers: { 'Authorization': USER_TOKEN, 'Content-Type': 'application/json' } }
+        );
+        return true;
+    } catch (error) {
+        console.error("Gagal mengirim sebagai user:", error.response ? error.response.data : error.message);
+        return false;
+    }
+}
+
+// Fungsi untuk memproses antrean pesan
+async function processQueue() {
+    if (messageQueue.length === 0 || !targetChannelId) return;
+
+    const targetChannel = client.channels.cache.get(targetChannelId);
+    if (!targetChannel) return;
+
+    // Cek apakah channel terbuka (memiliki izin SEND_MESSAGES untuk everyone/role default)
+    const canSend = targetChannel.permissionsFor(targetChannel.guild.id).has('SendMessages');
+
+    if (!canSend) {
+        if (!isStandby) {
+            isStandby = true;
+            if (operatorChannelId) {
+                const opChannel = client.channels.cache.get(operatorChannelId);
+                if (opChannel) opChannel.send("⚠️ **Mode Siaga Aktif:** Chanel target belum dibuka. Pesan masuk antrean.");
+            }
+        }
+        return; 
+    }
+
+    // Jika channel terbuka, kirim semua antrean
+    isStandby = false;
+    let successCount = 0;
+
+    while (messageQueue.length > 0) {
+        const msgContent = messageQueue[0]; 
+        const success = await sendAsUser(targetChannelId, msgContent);
+        
+        if (success) {
+            messageQueue.shift(); // Hapus dari antrean jika berhasil
+            successCount++;
+        } else {
+            break; // Jika gagal (rate limit dll), berhenti sejenak
+        }
+    }
+
+    if (successCount > 0 && operatorChannelId) {
+        const opChannel = client.channels.cache.get(operatorChannelId);
+        if (opChannel) {
+            opChannel.send(`✅ **Berhasil:** ${successCount} pesan dari antrean telah berhasil dikirim otomatis!`);
+        }
+    }
+}
 
 client.on('ready', () => {
-  console.log(`[SELFBOT READY] Login sebagai: ${client.user.tag}`);
+    console.log(`Bot pengelola aktif sebagai ${client.user.tag}`);
+    // Mengecek antrean setiap 5 detik
+    setInterval(processQueue, 5000);
 });
 
 client.on('messageCreate', async (message) => {
-  // 1. INPUT CS (Ketik dari akunmu sendiri di DM / mana saja)
-  if (message.author.id === client.user.id && message.content.startsWith('.cs')) {
-    const rawText = message.content.slice(3).trim();
-    const args = rawText.split('|').map(item => item.trim());
+    if (message.author.bot) return;
 
-    // Validasi input & lampiran gambar
-    if (args.length < 4 || message.attachments.size === 0) {
-      return message.reply('❌ **Format Salah!**\n\n**Cara Pakai:** Ketik `.cs Nama IC | Umur IC | Tgl Lahir | Story CS` lalu **upload/lampirkan foto screenshot** di pesan yang sama.');
+    if (message.content.startsWith('/setchoperator')) {
+        operatorChannelId = message.channel.id;
+        return message.reply(`✅ Chanel ini telah diatur sebagai **Chanel Operator**.`);
     }
 
-    const [nama, umur, tgl, story] = args;
-    const imageUrls = message.attachments.map(a => a.url);
-
-    pendingCS = {
-      content: `Nama [IC] : ${nama}\nUmur [IC] : ${umur}\nTanggal lahir [IC sesuai Id card] : ${tgl}\nSs stats & Id card [Wajib] : ada\nSs Tab Level in Game [Wajib]: ada\nStory : ${story}\nTag : <@&1212085960418791464>`,
-      files: imageUrls
-    };
-
-    isSent = false;
-    console.log('[SELFBOT] Data CS tersimpan dan masuk Mode Siaga.');
-    return message.reply('⏳ **[Mode Siaga Aktif]** Data CS & Gambar tersimpan! Akan otomatis terkirim begitu ada aktivitas di channel target.');
-  }
-
-  // 2. AUTO SEND (Mendeteksi saat channel target OPEN)
-  if (pendingCS && !isSent && message.channel.id === TARGET_CHANNEL_ID) {
-    isSent = true;
-    console.log('[SELFBOT] Channel target terdeteksi aktif! Mengirim CS...');
-
-    try {
-      const targetChannel = await client.channels.fetch(TARGET_CHANNEL_ID);
-      await targetChannel.send({
-        content: pendingCS.content,
-        files: pendingCS.files
-      });
-
-      const timeString = new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      console.log(`[BERHASIL] CS terkirim pada jam ${timeString} WIB`);
-
-      // Kirim konfirmasi ke DM kamu
-      await client.users.cache.get(client.user.id)?.send(`✅ **CS Berhasil dikirim pada jam ${timeString} WIB**`);
-      pendingCS = null;
-    } catch (err) {
-      console.error('[GAGAL KIRIM]', err);
-      isSent = false; // Reset jika gagal agar bisa coba lagi
+    if (message.content.startsWith('/settarget')) {
+        const args = message.content.split(' ');
+        if (!args[1]) return message.reply("❌ Masukkan ID Chanel! Contoh: `/settarget 1234567890`");
+        
+        targetChannelId = args[1];
+        return message.reply(`✅ Chanel target pengiriman diatur ke: <#${targetChannelId}>`);
     }
-  }
-});
 
-client.login(USER_TOKEN).catch(err => {
-  console.error('❌ Gagal login token akun:', err.message);
-});              return;
-            }
+    if (message.content.startsWith('/startkirim')) {
+        if (!operatorChannelId) return message.reply("❌ Setel Chanel Operator terlebih dahulu dengan `/setchoperator`");
+        if (!targetChannelId) return message.reply("❌ Setel Chanel Target terlebih dahulu dengan `/settarget <ID>`");
+        
+        if (!message.reference || !message.reference.messageId) {
+            return message.reply("❌ Anda harus me-reply sebuah pesan lalu ketik `/startkirim`.");
+        }
 
-            await statusMsg.edit(`🔄 **[Sistem]** Channel ditemukan! Mencoba mengirim formulir CS...`);
-            await targetChannel.send({ content: contentMessage, files: imageUrls });
-            isSent = true;
+        try {
+            const repliedMsg = await message.channel.messages.fetch(message.reference.messageId);
             
-            const timeString = new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit', second: '2-digit' });
-            await statusMsg.edit(`✅ **CS Berhasil dikirim pada jam ${timeString} WIB**`);
-            selfClient.destroy();
-          } catch (err) {
-            if (err.code !== 50013) { 
-              console.error('[SEND ERROR]', err);
-              await statusMsg.edit(`❌ **[Error Pengiriman]** ${err.message}`);
-              selfClient.destroy();
-            } else {
-              await statusMsg.edit(`⏳ **[Mode Siaga]** Channel masih di-lock (Terkunci). Menunggu ada admin yang buka channel...`);
+            let finalContent = repliedMsg.content || "";
+            if (repliedMsg.attachments.size > 0) {
+                const attachmentUrls = repliedMsg.attachments.map(a => a.url).join('\n');
+                finalContent += `\n${attachmentUrls}`; 
             }
-          }
-        };
 
-        selfClient.on('ready', async () => {
-          await statusMsg.edit(`✅ **[Sistem]** Berhasil login sebagai: \`${selfClient.user.tag}\`. Memulai proses...`);
-          await attemptSend(); 
-        });
+            if (!finalContent) return message.reply("❌ Pesan yang di-reply kosong atau tidak valid.");
 
-        selfClient.on('messageCreate', async msg => {
-          if (msg.channel.id === targetChannelId) await attemptSend();
-        });
+            messageQueue.push(finalContent);
+            message.reply("⏳ Pesan dimasukkan ke sistem. Sedang mengecek status channel...");
+            
+            await processQueue();
 
-        selfClient.on('channelUpdate', async (oldCh, newCh) => {
-          if (newCh.id === targetChannelId) await attemptSend();
-        });
-
-        await selfClient.login(userToken).catch(async err => {
-          console.error('[LOGIN ERROR]', err);
-          await statusMsg.edit(`❌ **[Error Login]** Gagal login! Pastikan token akun BENAR.\n*Log: ${err.message}*`);
-        });
-
-      } catch (err) {
-        await statusMsg.edit(`❌ **[Error Fatal]** Terjadi kesalahan pada sistem: ${err.message}`);
-      }
-    });
-
-    collector.on('end', async () => {
-      if (!isImageCollected) {
-        await interaction.followUp({ content: '⏳ Waktu habis! Kamu tidak mengirimkan gambar tepat waktu.', ephemeral: true });
-      }
-    });
-  }
+        } catch (error) {
+            console.error(error);
+            message.reply("❌ Terjadi kesalahan saat memproses pesan.");
+        }
+    }
 });
 
-bot.login(BOT_TOKEN);
+// Trigger pengecekan otomatis saat permission channel diubah
+client.on('channelUpdate', (oldChannel, newChannel) => {
+    if (newChannel.id === targetChannelId) {
+        processQueue(); 
+    }
+});
+
+client.login(BOT_TOKEN);
