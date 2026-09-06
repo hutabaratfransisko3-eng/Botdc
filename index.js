@@ -23,6 +23,7 @@ let targetChannelId = null;
 let messageQueue = [];
 let isStandby = false;
 
+// Slash Commands
 const commands = [
     new SlashCommandBuilder()
         .setName('setchoperator')
@@ -36,7 +37,11 @@ const commands = [
                 .setRequired(true)),
     new SlashCommandBuilder()
         .setName('startkirim')
-        .setDescription('Meneruskan pesan yang di-reply ke channel target')
+        .setDescription('Kirim pesan berdasarkan ID pesan')
+        .addStringOption(option =>
+            option.setName('message_id')
+                .setDescription('ID Pesan yang ingin diteruskan')
+                .setRequired(true))
 ].map(command => command.toJSON());
 
 async function registerCommands(clientId) {
@@ -49,6 +54,7 @@ async function registerCommands(clientId) {
     }
 }
 
+// Fungsi kirim via Akun User (Self-bot API)
 async function sendAsUser(channelId, content) {
     try {
         await axios.post(
@@ -64,7 +70,7 @@ async function sendAsUser(channelId, content) {
         );
         return true;
     } catch (error) {
-        console.error("Gagal mengirim sebagai user:", error.response ? error.response.data : error.message);
+        console.error("ERROR KIRIM USER:", error.response ? JSON.stringify(error.response.data) : error.message);
         return false;
     }
 }
@@ -77,7 +83,7 @@ async function processQueue() {
     if (!targetChannel) {
         if (operatorChannelId) {
             const opChannel = client.channels.cache.get(operatorChannelId);
-            if (opChannel) opChannel.send(`❌ **Error Kritis:** Bot pengelola tidak bisa melihat channel target <#${targetChannelId}>. Pastikan Bot sudah diundang ke server target dan memiliki izin View Channel!`);
+            if (opChannel) opChannel.send(`❌ **Error:** Bot tidak bisa melihat channel target ID: \`${targetChannelId}\`. Cek izin bot!`);
         }
         return; 
     }
@@ -89,7 +95,7 @@ async function processQueue() {
             isStandby = true;
             if (operatorChannelId) {
                 const opChannel = client.channels.cache.get(operatorChannelId);
-                if (opChannel) opChannel.send(`⚠️ **Mode Siaga Aktif:** Chanel <#${targetChannelId}> masih terkunci. Pesan ditahan di antrean.`);
+                if (opChannel) opChannel.send(`⚠️ **Mode Siaga Aktif:** Channel <#${targetChannelId}> masih dikunci. Pesan dimasukkan ke antrean.`);
             }
         }
         return; 
@@ -106,6 +112,110 @@ async function processQueue() {
             messageQueue.shift();
             successCount++;
         } else {
+            if (operatorChannelId) {
+                const opChannel = client.channels.cache.get(operatorChannelId);
+                if (opChannel) opChannel.send(`❌ **Gagal:** Token User ditolak/invalid atau terkena Rate Limit API Discord. Cek log Railway!`);
+            }
+            break;
+        }
+    }
+
+    if (successCount > 0 && operatorChannelId) {
+        const opChannel = client.channels.cache.get(operatorChannelId);
+        if (opChannel) {
+            opChannel.send(`✅ **Berhasil:** ${successCount} pesan telah dikirim oleh akun User Anda!`);
+        }
+    }
+}
+
+client.on('ready', async () => {
+    console.log(`Bot pengelola aktif sebagai ${client.user.tag}`);
+    await registerCommands(client.user.id);
+    setInterval(processQueue, 3000);
+});
+
+// Handling Slash Command
+client.on('interactionCreate', async interaction => {
+    if (!interaction.isChatInputCommand()) return;
+    const { commandName } = interaction;
+
+    if (commandName === 'setchoperator') {
+        operatorChannelId = interaction.channelId;
+        await interaction.reply(`✅ Channel operator diatur ke: <#${operatorChannelId}>`);
+    }
+
+    else if (commandName === 'settarget') {
+        targetChannelId = interaction.options.getString('channel_id');
+        await interaction.reply(`✅ Channel target diatur ke: <#${targetChannelId}>`);
+    }
+
+    else if (commandName === 'startkirim') {
+        if (!operatorChannelId) return interaction.reply({ content: "❌ Setel channel operator dulu pakai `/setchoperator`", ephemeral: true });
+        if (!targetChannelId) return interaction.reply({ content: "❌ Setel channel target dulu pakai `/settarget`", ephemeral: true });
+
+        const msgId = interaction.options.getString('message_id');
+        
+        try {
+            const targetMsg = await interaction.channel.messages.fetch(msgId);
+            
+            let finalContent = targetMsg.content || "";
+            if (targetMsg.attachments.size > 0) {
+                const attachmentUrls = targetMsg.attachments.map(a => a.url).join('\n');
+                finalContent += `\n${attachmentUrls}`; 
+            }
+
+            if (!finalContent) return interaction.reply({ content: "❌ Pesan tersebut kosong!", ephemeral: true });
+
+            messageQueue.push(finalContent);
+            await interaction.reply(`⏳ Pesan (ID: \`${msgId}\`) masuk antrean. Memproses...`);
+            await processQueue();
+
+        } catch (err) {
+            await interaction.reply({ content: `❌ ID Pesan \`${msgId}\` tidak ditemukan di channel ini!`, ephemeral: true });
+        }
+    }
+});
+
+// Handling Prefix Reply Bawaan (!startkirim)
+client.on('messageCreate', async message => {
+    if (message.author.bot) return;
+
+    if (message.content === '!startkirim' || message.content === '.startkirim') {
+        if (!operatorChannelId) return message.reply("❌ Setel channel operator dulu pakai `/setchoperator`!");
+        if (!targetChannelId) return message.reply("❌ Setel channel target dulu pakai `/settarget`!");
+
+        if (!message.reference || !message.reference.messageId) {
+            return message.reply("❌ Balas (reply) pesan yang mau dikirim lalu ketik `!startkirim`!");
+        }
+
+        try {
+            const targetMsg = await message.channel.messages.fetch(message.reference.messageId);
+
+            let finalContent = targetMsg.content || "";
+            if (targetMsg.attachments.size > 0) {
+                const attachmentUrls = targetMsg.attachments.map(a => a.url).join('\n');
+                finalContent += `\n${attachmentUrls}`; 
+            }
+
+            if (!finalContent) return message.reply("❌ Pesan tersebut kosong.");
+
+            messageQueue.push(finalContent);
+            message.reply("⏳ Pesan masuk antrean. Memproses...");
+            await processQueue();
+
+        } catch (err) {
+            message.reply("❌ Gagal mengambil pesan yang di-reply.");
+        }
+    }
+});
+
+client.on('channelUpdate', (oldChannel, newChannel) => {
+    if (newChannel.id === targetChannelId) {
+        processQueue(); 
+    }
+});
+
+client.login(BOT_TOKEN);        } else {
             if (operatorChannelId) {
                 const opChannel = client.channels.cache.get(operatorChannelId);
                 if (opChannel) opChannel.send(`❌ **Gagal:** Token User ditolak oleh Discord API. Cek log Railway Anda.`);
