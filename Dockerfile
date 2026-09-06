@@ -1,14 +1,15 @@
-FROM node:20-alpine
+# Menggunakan Node.js versi 18 yang ringan (Alpine)
+FROM node:18-alpine
 
-# Tambahkan baris ini untuk menginstal Git di dalam container
-RUN apk add --no-cache git
-
+# Menentukan direktori kerja di dalam container
 WORKDIR /usr/src/app
 
+# Menyalin package.json dan menginstal library
 COPY package*.json ./
+RUN npm install
 
-RUN npm install --production
-
+# Menyalin seluruh kode ke dalam container
 COPY . .
 
-CMD ["npm", "start"]
+# Menjalankan aplikasi
+CMD [ "npm", "start" ]
