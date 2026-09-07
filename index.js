@@ -189,8 +189,13 @@ client.on('interactionCreate', async interaction => {
         try {
             const targetMsg = await interaction.channel.messages.fetch(msgId);
             
-            // HANYA MENGAMBIL ISI TEKS UTAMA (Tanpa lampiran link attachment Discord)
             let finalContent = targetMsg.content || "";
+            
+            // FITUR BARU: Hide URL tapi foto tetap terkirim
+            if (targetMsg.attachments.size > 0) {
+                const attachmentUrls = targetMsg.attachments.map((a, index) => `[🖼️ Lampiran Gambar ${index + 1}](${a.url})`).join('\n');
+                finalContent += `\n\n${attachmentUrls}`; 
+            }
 
             if (!finalContent) return interaction.reply({ content: "❌ Pesan tersebut kosong!", flags: 64 });
 
@@ -228,8 +233,13 @@ client.on('messageCreate', async message => {
         try {
             const targetMsg = await message.channel.messages.fetch(message.reference.messageId);
 
-            // HANYA MENGAMBIL ISI TEKS UTAMA (Tanpa lampiran link attachment Discord)
             let finalContent = targetMsg.content || "";
+            
+            // FITUR BARU: Hide URL tapi foto tetap terkirim
+            if (targetMsg.attachments.size > 0) {
+                const attachmentUrls = targetMsg.attachments.map((a, index) => `[🖼️ Lampiran Gambar ${index + 1}](${a.url})`).join('\n');
+                finalContent += `\n\n${attachmentUrls}`; 
+            }
 
             if (!finalContent) return message.reply("❌ Pesan tersebut kosong.");
 
