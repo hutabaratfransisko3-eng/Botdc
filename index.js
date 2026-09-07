@@ -26,24 +26,24 @@ let isStandby = false;
 const commands = [
     new SlashCommandBuilder()
         .setName('setchoperator')
-        .setDescription('Mengatur channel ini sebagai channel operator bot'),
+        .setDescription('Mengatur channel ini sebagai pusat kontrol bot'),
     new SlashCommandBuilder()
         .setName('settarget')
-        .setDescription('Mengatur channel target pengiriman')
+        .setDescription('Mengatur rute channel target transmisi')
         .addStringOption(option => 
             option.setName('channel_id')
                 .setDescription('ID Channel Tujuan')
                 .setRequired(true)),
     new SlashCommandBuilder()
         .setName('startkirim')
-        .setDescription('Kirim pesan berdasarkan ID pesan')
+        .setDescription('Eksekusi transmisi pesan ke target')
         .addStringOption(option =>
             option.setName('message_id')
-                .setDescription('ID Pesan yang ingin diteruskan')
+                .setDescription('ID Pesan yang ingin ditransmisikan')
                 .setRequired(true)),
     new SlashCommandBuilder()
         .setName('status')
-        .setDescription('Melihat status sistem, informasi akun user, dan antrean')
+        .setDescription('Tampilkan laporan diagnostik sistem')
 ].map(command => command.toJSON());
 
 async function registerCommands(clientId) {
@@ -87,7 +87,7 @@ async function sendAsUser(channelId, content) {
                 headers: { 
                     'Authorization': USER_TOKEN, 
                     'Content-Type': 'application/json',
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
                 } 
             }
         );
@@ -114,7 +114,7 @@ async function processQueue() {
         
         if (operatorChannelId) {
             const opChannel = client.channels.cache.get(operatorChannelId);
-            if (opChannel) opChannel.send(`✅ **TARGET TERTEMBUS:** Pesan otomatis terkirim ke target!`);
+            if (opChannel) opChannel.send(`**[ 🟢 UPLINK SUCCESS ]** | Transmisi data ke target berhasil dieksekusi.`);
         }
     } else {
         if (result.status === 403 || result.code === 50013 || result.code === 50001 || result.code === 50009) {
@@ -122,14 +122,14 @@ async function processQueue() {
                 isStandby = true;
                 if (operatorChannelId) {
                     const opChannel = client.channels.cache.get(operatorChannelId);
-                    if (opChannel) opChannel.send(`⚠️ **Mode Siaga Aktif:** Channel <#${targetChannelId}> belum dibuka. Bot terus memantau dan siap menembak!`);
+                    if (opChannel) opChannel.send(`**[ 🟡 SYSTEM STANDBY ]** | Akses ke <#${targetChannelId}> terkunci. Protokol pemantauan pasif diaktifkan. Pesan akan meluncur otomatis saat jalur terbuka.`);
                 }
             }
         } 
         else if (result.status === 401) {
             if (operatorChannelId && !isStandby) {
                 const opChannel = client.channels.cache.get(operatorChannelId);
-                if (opChannel) opChannel.send(`❌ **Gagal Kritis:** Token User Anda tidak sah atau kadaluarsa (401).`);
+                if (opChannel) opChannel.send(`**[ 🔴 CRITICAL ERROR ]** | Autentikasi ditolak (401). User Token kedaluwarsa atau tidak valid.`);
                 isStandby = true;
             }
         } 
@@ -143,26 +143,25 @@ async function getStatusText() {
     const userProfile = await getUserProfile();
     
     const accountStatus = userProfile.valid 
-        ? `🟢 Terhubung (${userProfile.name})` 
-        : `🔴 Token Invalid / Terputus`;
+        ? `🟢 AKTIF (${userProfile.name})` 
+        : `🔴 TERPUTUS / TOKEN INVALID`;
         
-    const modeStatus = isStandby ? `⚠️ Mode Siaga (Menunggu Channel Buka)` : `🟢 Normal / Siap`;
-    const opChText = operatorChannelId ? `<#${operatorChannelId}>` : `❌ Belum di-set`;
-    const targetChText = targetChannelId ? `<#${targetChannelId}> (\`${targetChannelId}\`)` : `❌ Belum di-set`;
+    const modeStatus = isStandby ? `🟡 SIAGA (MENDETEKSI JALUR)` : `🟢 NORMAL (SIAP TEMBAK)`;
+    const opChText = operatorChannelId ? `<#${operatorChannelId}>` : `❌ NOT CONFIGURED`;
+    const targetChText = targetChannelId ? `<#${targetChannelId}> (\`${targetChannelId}\`)` : `❌ NOT CONFIGURED`;
 
-    return `📊 **STATUS SISTEM BOT FORWARDER**\n` +
-           `━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-           `👤 **Akun Pengirim:** ${accountStatus}\n` +
-           `🛠️ **Bot Pengelola:** ${client.user.tag}\n` +
-           `📢 **Channel Operator:** ${opChText}\n` +
-           `🎯 **Channel Target:** ${targetChText}\n` +
-           `🔄 **Status Mode:** ${modeStatus}\n` +
-           `📦 **Jumlah Antrean Pesan:** \`${messageQueue.length}\` Pesan\n` +
+    return `\`\`\`ini\n[ SYSTEM DIAGNOSTIC REPORT ]\n\`\`\`` +
+           `> **User Node:** ${accountStatus}\n` +
+           `> **Bot Gateway:** ${client.user.tag}\n` +
+           `> **Control Center:** ${opChText}\n` +
+           `> **Target Vector:** ${targetChText}\n` +
+           `> **Operational Status:** ${modeStatus}\n` +
+           `> **Payload Queue:** \`${messageQueue.length}\` Data tertahan\n` +
            `━━━━━━━━━━━━━━━━━━━━━━━━━`;
 }
 
 client.on('ready', async () => {
-    console.log(`Bot pengelola aktif sebagai ${client.user.tag}`);
+    console.log(`[SYS] Bot aktif sebagai ${client.user.tag}`);
     await registerCommands(client.user.id);
     setInterval(processQueue, 3000);
 });
@@ -173,42 +172,49 @@ client.on('interactionCreate', async interaction => {
 
     if (commandName === 'setchoperator') {
         operatorChannelId = interaction.channelId;
-        await interaction.reply({ content: `✅ Channel operator diatur ke: <#${operatorChannelId}>` });
+        await interaction.reply({ 
+            content: `**[ ⚙️ CONFIG ]** | Channel ini telah ditetapkan sebagai Pusat Kontrol Utama.`, 
+            ephemeral: true 
+        });
     }
     else if (commandName === 'settarget') {
         targetChannelId = interaction.options.getString('channel_id');
         isStandby = false; 
-        await interaction.reply({ content: `✅ Channel target diatur ke ID: \`${targetChannelId}\`` });
+        await interaction.reply({ 
+            content: `**[ 🎯 TARGET ]** | Kordinat tujuan berhasil dikunci ke: <#${targetChannelId}>.`, 
+            ephemeral: true 
+        });
     }
     else if (commandName === 'startkirim') {
-        if (!operatorChannelId) return interaction.reply({ content: "❌ Setel channel operator dulu pakai `/setchoperator`", flags: 64 });
-        if (!targetChannelId) return interaction.reply({ content: "❌ Setel channel target dulu pakai `/settarget`", flags: 64 });
+        if (!operatorChannelId) return interaction.reply({ content: "**[ ⚠️ ALERT ]** Konfigurasi `/setchoperator` terlebih dahulu.", ephemeral: true });
+        if (!targetChannelId) return interaction.reply({ content: "**[ ⚠️ ALERT ]** Tentukan rute menggunakan `/settarget` terlebih dahulu.", ephemeral: true });
 
         const msgId = interaction.options.getString('message_id');
         
         try {
             const targetMsg = await interaction.channel.messages.fetch(msgId);
-            
             let finalContent = targetMsg.content || "";
             
-            // FITUR BARU: Hide URL tapi foto tetap terkirim
             if (targetMsg.attachments.size > 0) {
-                const attachmentUrls = targetMsg.attachments.map((a, index) => `[🖼️ Lampiran Gambar ${index + 1}](${a.url})`).join('\n');
+                const attachmentUrls = targetMsg.attachments.map((a, index) => `[ 📎 Attachment Data ${index + 1} ](${a.url})`).join('\n');
                 finalContent += `\n\n${attachmentUrls}`; 
             }
 
-            if (!finalContent) return interaction.reply({ content: "❌ Pesan tersebut kosong!", flags: 64 });
+            if (!finalContent) return interaction.reply({ content: "**[ ⚠️ ALERT ]** Muatan pesan kosong. Operasi dibatalkan.", ephemeral: true });
 
             messageQueue.push(finalContent);
-            await interaction.reply({ content: `⏳ Peluru disiapkan... Radar penembak diaktifkan.`, flags: 64 });
+            await interaction.reply({ 
+                content: `**[ 🚀 EKSEKUSI ]** | Muatan pesan diamankan. Memulai penetrasi ke target...`, 
+                ephemeral: true 
+            });
             processQueue();
 
         } catch (err) {
-            await interaction.reply({ content: `❌ ID Pesan \`${msgId}\` tidak ditemukan di channel ini!`, flags: 64 });
+            await interaction.reply({ content: `**[ ❌ ERROR ]** Kordinat ID Pesan \`${msgId}\` tidak ditemukan.`, ephemeral: true });
         }
     }
     else if (commandName === 'status') {
-        await interaction.deferReply();
+        await interaction.deferReply({ ephemeral: true });
         const statusMsg = await getStatusText();
         await interaction.editReply({ content: statusMsg });
     }
@@ -219,36 +225,34 @@ client.on('messageCreate', async message => {
 
     if (message.content === '!status' || message.content === '.status') {
         const statusMsg = await getStatusText();
-        return message.reply(statusMsg);
+        return message.reply({ content: statusMsg });
     }
 
     if (message.content === '!startkirim' || message.content === '.startkirim') {
-        if (!operatorChannelId) return message.reply("❌ Setel channel operator dulu pakai `/setchoperator`!");
-        if (!targetChannelId) return message.reply("❌ Setel channel target dulu pakai `/settarget`!");
+        if (!operatorChannelId) return message.reply("**[ ⚠️ ALERT ]** Konfigurasi `/setchoperator` terlebih dahulu.");
+        if (!targetChannelId) return message.reply("**[ ⚠️ ALERT ]** Tentukan rute menggunakan `/settarget` terlebih dahulu.");
 
         if (!message.reference || !message.reference.messageId) {
-            return message.reply("❌ Balas (reply) pesan yang mau dikirim lalu ketik `!startkirim`!");
+            return message.reply("**[ ⚠️ ALERT ]** Balas (reply) muatan pesan yang ingin ditransmisikan.");
         }
 
         try {
             const targetMsg = await message.channel.messages.fetch(message.reference.messageId);
-
             let finalContent = targetMsg.content || "";
             
-            // FITUR BARU: Hide URL tapi foto tetap terkirim
             if (targetMsg.attachments.size > 0) {
-                const attachmentUrls = targetMsg.attachments.map((a, index) => `[🖼️ Lampiran Gambar ${index + 1}](${a.url})`).join('\n');
+                const attachmentUrls = targetMsg.attachments.map((a, index) => `[ 📎 Attachment Data ${index + 1} ](${a.url})`).join('\n');
                 finalContent += `\n\n${attachmentUrls}`; 
             }
 
-            if (!finalContent) return message.reply("❌ Pesan tersebut kosong.");
+            if (!finalContent) return message.reply("**[ ⚠️ ALERT ]** Muatan pesan kosong.");
 
             messageQueue.push(finalContent);
-            message.reply("⏳ Peluru disiapkan... Radar penembak diaktifkan.");
+            message.reply("**[ 🚀 EKSEKUSI ]** | Muatan pesan diamankan. Memulai penetrasi ke target...");
             processQueue();
 
         } catch (err) {
-            message.reply("❌ Gagal mengambil pesan yang di-reply.");
+            message.reply("**[ ❌ ERROR ]** Gagal mengamankan muatan dari pesan yang direply.");
         }
     }
 });
