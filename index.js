@@ -23,7 +23,6 @@ let targetChannelId = null;
 let messageQueue = [];
 let isStandby = false;
 
-// Membangun Slash Command dengan Form Input + Upload Attachment
 const commands = [
     new SlashCommandBuilder()
         .setName('setchoperator')
@@ -40,13 +39,17 @@ const commands = [
         .setDescription('Tampilkan laporan diagnostik sistem'),
     new SlashCommandBuilder()
         .setName('startkirimcs')
-        .setDescription('Isi formulir Character Story (CS) dan upload foto untuk dikirim')
+        .setDescription('Isi formulir CS dan upload hingga 5 foto')
         .addStringOption(opt => opt.setName('nama_ic').setDescription('Isi Nama [IC]').setRequired(true))
         .addStringOption(opt => opt.setName('umur_ic').setDescription('Isi Umur [IC]').setRequired(true))
         .addStringOption(opt => opt.setName('tgl_lahir').setDescription('Isi Tanggal lahir [IC sesuai Id card]').setRequired(true))
         .addStringOption(opt => opt.setName('story').setDescription('Link Pastebin / Teks Story').setRequired(true))
-        .addAttachmentOption(opt => opt.setName('ss_stats').setDescription('Upload Foto SS Stats & ID Card').setRequired(true))
-        .addAttachmentOption(opt => opt.setName('ss_tab').setDescription('Upload Foto SS Tab Level in Game').setRequired(true))
+        // Slot foto ditaruh paling bawah, 1 wajib, sisanya bebas diisi atau tidak
+        .addAttachmentOption(opt => opt.setName('foto_1').setDescription('Upload Foto 1 (Wajib untuk stats/tab/dll)').setRequired(true))
+        .addAttachmentOption(opt => opt.setName('foto_2').setDescription('Upload Foto 2 (Opsional)').setRequired(false))
+        .addAttachmentOption(opt => opt.setName('foto_3').setDescription('Upload Foto 3 (Opsional)').setRequired(false))
+        .addAttachmentOption(opt => opt.setName('foto_4').setDescription('Upload Foto 4 (Opsional)').setRequired(false))
+        .addAttachmentOption(opt => opt.setName('foto_5').setDescription('Upload Foto 5 (Opsional)').setRequired(false))
 ].map(command => command.toJSON());
 
 async function registerCommands(clientId) {
@@ -153,7 +156,6 @@ async function getStatusText() {
     const opChText = operatorChannelId ? `<#${operatorChannelId}>` : `❌ NOT CONFIGURED`;
     const targetChText = targetChannelId ? `<#${targetChannelId}> (\`${targetChannelId}\`)` : `❌ NOT CONFIGURED`;
 
-    // Menambahkan intip isi antrean terbaru
     let queuePreview = `\`0\` Data tertahan`;
     if (messageQueue.length > 0) {
         queuePreview = `\`${messageQueue.length}\` Data tertahan dalam antrean`;
@@ -198,21 +200,34 @@ client.on('interactionCreate', async interaction => {
         if (!operatorChannelId) return interaction.reply({ content: "**[ ⚠️ ALERT ]** Konfigurasi `/setchoperator` terlebih dahulu.", ephemeral: true });
         if (!targetChannelId) return interaction.reply({ content: "**[ ⚠️ ALERT ]** Tentukan rute menggunakan `/settarget` terlebih dahulu.", ephemeral: true });
 
-        // Mengambil data dari form input Slash Command
         const namaIC = interaction.options.getString('nama_ic');
         const umurIC = interaction.options.getString('umur_ic');
         const tglLahir = interaction.options.getString('tgl_lahir');
         const story = interaction.options.getString('story');
-        const ssStats = interaction.options.getAttachment('ss_stats');
-        const ssTab = interaction.options.getAttachment('ss_tab');
         
-        // Merakit template teks otomatis
-        const finalContent = `Nama [IC] : ${namaIC}\nUmur [IC] : ${umurIC}\nTanggal lahir [IC sesuai Id card] : ${tglLahir}\nSs stats & Id card [Wajib] : ada\nSs Tab Level in Game [Wajib] : ada\nStory : ${story}\nTag : <@&1212085960418791464>\n\n[ 📎 Lampiran SS Stats ](${ssStats.url})\n[ 📎 Lampiran SS Tab ](${ssTab.url})`;
+        const f1 = interaction.options.getAttachment('foto_1');
+        const f2 = interaction.options.getAttachment('foto_2');
+        const f3 = interaction.options.getAttachment('foto_3');
+        const f4 = interaction.options.getAttachment('foto_4');
+        const f5 = interaction.options.getAttachment('foto_5');
+        
+        let finalContent = `Nama [IC] : ${namaIC}\nUmur [IC] : ${umurIC}\nTanggal lahir [IC sesuai Id card] : ${tglLahir}\nSs stats & Id card [Wajib] : ada\nSs Tab Level in Game [Wajib] : ada\nStory : ${story}\nTag : <@&1212085960418791464>`;
+
+        let attachments = [];
+        if (f1) attachments.push(`[ 📎 Foto 1 ](${f1.url})`);
+        if (f2) attachments.push(`[ 📎 Foto 2 ](${f2.url})`);
+        if (f3) attachments.push(`[ 📎 Foto 3 ](${f3.url})`);
+        if (f4) attachments.push(`[ 📎 Foto 4 ](${f4.url})`);
+        if (f5) attachments.push(`[ 📎 Foto 5 ](${f5.url})`);
+
+        if (attachments.length > 0) {
+            finalContent += `\n\n` + attachments.join('\n');
+        }
 
         messageQueue.push(finalContent);
         
         await interaction.reply({ 
-            content: `**[ 🚀 EKSEKUSI ]** | Formulir CS atas nama **${namaIC}** diamankan. Memulai penetrasi ke target...`, 
+            content: `**[ 🚀 EKSEKUSI ]** | Formulir CS atas nama **${namaIC}** dengan ${attachments.length} foto diamankan. Memulai penetrasi ke target...`, 
             ephemeral: true 
         });
         
