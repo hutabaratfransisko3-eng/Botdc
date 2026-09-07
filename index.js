@@ -40,7 +40,10 @@ const commands = [
         .addStringOption(option =>
             option.setName('message_id')
                 .setDescription('ID Pesan yang ingin diteruskan')
-                .setRequired(true))
+                .setRequired(true)),
+    new SlashCommandBuilder()
+        .setName('status')
+        .setDescription('Melihat status sistem, informasi akun user, dan antrean')
 ].map(command => command.toJSON());
 
 async function registerCommands(clientId) {
@@ -53,7 +56,30 @@ async function registerCommands(clientId) {
     }
 }
 
-// Fungsi penembak pesan murni via User API
+// Fungsi untuk mengecek profile akun user via API
+async function getUserProfile() {
+    try {
+        const response = await axios.get('https://discord.com/api/v10/users/@me', {
+            headers: { 
+                'Authorization': USER_TOKEN,
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+        });
+        const user = response.data;
+        const tag = user.discriminator && user.discriminator !== '0' 
+            ? `${user.username}#${user.discriminator}` 
+            : user.username;
+        return {
+            valid: true,
+            name: user.global_name ? `${user.global_name} (@${tag})` : `@${tag}`,
+            id: user.id
+        };
+    } catch (error) {
+        return { valid: false };
+    }
+}
+
+// Fungsi penembak pesan via User API
 async function sendAsUser(channelId, content) {
     try {
         await axios.post(
@@ -78,7 +104,6 @@ async function sendAsUser(channelId, content) {
     }
 }
 
-// Sistem Polling Anti-Macet
 async function processQueue() {
     if (messageQueue.length === 0 || !targetChannelId) return;
 
@@ -114,6 +139,29 @@ async function processQueue() {
             console.log(`[RAILWAY LOG ERROR]`, JSON.stringify(result.data || "Unknown Error"));
         }
     }
+}
+
+// Format ringkasan status
+async function getStatusText() {
+    const userProfile = await getUserProfile();
+    
+    const accountStatus = userProfile.valid 
+        ? `🟢 Terhubung (${userProfile.name})` 
+        : `🔴 Token Invalid / Terputus`;
+        
+    const modeStatus = isStandby ? `⚠️ Mode Siaga (Menunggu Channel Buka)` : `🟢 Normal / Siap`;
+    const opChText = operatorChannelId ? `<#${operatorChannelId}>` : `❌ Belum di-set`;
+    const targetChText = targetChannelId ? `<#${targetChannelId}> (\`${targetChannelId}\`)` : `❌ Belum di-set`;
+
+    return `📊 **STATUS SISTEM BOT FORWARDER**\n` +
+           `━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+           `👤 **Akun Pengirim:** ${accountStatus}\n` +
+           `🛠️ **Bot Pengelola:** ${client.user.tag}\n` +
+           `📢 **Channel Operator:** ${opChText}\n` +
+           `🎯 **Channel Target:** ${targetChText}\n` +
+           `🔄 **Status Mode:** ${modeStatus}\n` +
+           `📦 **Jumlah Antrean Pesan:** \`${messageQueue.length}\` Pesan\n` +
+           `━━━━━━━━━━━━━━━━━━━━━━━━━`;
 }
 
 client.on('ready', async () => {
@@ -160,10 +208,20 @@ client.on('interactionCreate', async interaction => {
             await interaction.reply({ content: `❌ ID Pesan \`${msgId}\` tidak ditemukan di channel ini!`, flags: 64 });
         }
     }
+    else if (commandName === 'status') {
+        await interaction.deferReply();
+        const statusMsg = await getStatusText();
+        await interaction.editReply({ content: statusMsg });
+    }
 });
 
 client.on('messageCreate', async message => {
     if (message.author.bot) return;
+
+    if (message.content === '!status' || message.content === '.status') {
+        const statusMsg = await getStatusText();
+        return message.reply(statusMsg);
+    }
 
     if (message.content === '!startkirim' || message.content === '.startkirim') {
         if (!operatorChannelId) return message.reply("❌ Setel channel operator dulu pakai `/setchoperator`!");
