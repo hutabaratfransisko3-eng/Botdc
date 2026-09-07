@@ -23,6 +23,7 @@ let targetChannelId = null;
 let messageQueue = [];
 let isStandby = false;
 
+// Membangun Slash Command dengan Form Input + Upload Attachment
 const commands = [
     new SlashCommandBuilder()
         .setName('setchoperator')
@@ -35,15 +36,17 @@ const commands = [
                 .setDescription('ID Channel Tujuan')
                 .setRequired(true)),
     new SlashCommandBuilder()
-        .setName('startkirim')
-        .setDescription('Eksekusi transmisi pesan ke target')
-        .addStringOption(option =>
-            option.setName('message_id')
-                .setDescription('ID Pesan yang ingin ditransmisikan')
-                .setRequired(true)),
-    new SlashCommandBuilder()
         .setName('status')
-        .setDescription('Tampilkan laporan diagnostik sistem')
+        .setDescription('Tampilkan laporan diagnostik sistem'),
+    new SlashCommandBuilder()
+        .setName('startkirimcs')
+        .setDescription('Isi formulir Character Story (CS) dan upload foto untuk dikirim')
+        .addStringOption(opt => opt.setName('nama_ic').setDescription('Isi Nama [IC]').setRequired(true))
+        .addStringOption(opt => opt.setName('umur_ic').setDescription('Isi Umur [IC]').setRequired(true))
+        .addStringOption(opt => opt.setName('tgl_lahir').setDescription('Isi Tanggal lahir [IC sesuai Id card]').setRequired(true))
+        .addStringOption(opt => opt.setName('story').setDescription('Link Pastebin / Teks Story').setRequired(true))
+        .addAttachmentOption(opt => opt.setName('ss_stats').setDescription('Upload Foto SS Stats & ID Card').setRequired(true))
+        .addAttachmentOption(opt => opt.setName('ss_tab').setDescription('Upload Foto SS Tab Level in Game').setRequired(true))
 ].map(command => command.toJSON());
 
 async function registerCommands(clientId) {
@@ -114,7 +117,7 @@ async function processQueue() {
         
         if (operatorChannelId) {
             const opChannel = client.channels.cache.get(operatorChannelId);
-            if (opChannel) opChannel.send(`**[ 🟢 UPLINK SUCCESS ]** | Transmisi data ke target berhasil dieksekusi.`);
+            if (opChannel) opChannel.send(`**[ 🟢 UPLINK SUCCESS ]** | Transmisi data CS ke target berhasil dieksekusi.`);
         }
     } else {
         if (result.status === 403 || result.code === 50013 || result.code === 50001 || result.code === 50009) {
@@ -122,7 +125,7 @@ async function processQueue() {
                 isStandby = true;
                 if (operatorChannelId) {
                     const opChannel = client.channels.cache.get(operatorChannelId);
-                    if (opChannel) opChannel.send(`**[ 🟡 SYSTEM STANDBY ]** | Akses ke <#${targetChannelId}> terkunci. Protokol pemantauan pasif diaktifkan. Pesan akan meluncur otomatis saat jalur terbuka.`);
+                    if (opChannel) opChannel.send(`**[ 🟡 SYSTEM STANDBY ]** | Akses ke <#${targetChannelId}> terkunci. Protokol pemantauan pasif diaktifkan. Formulir akan meluncur otomatis saat jalur terbuka.`);
                 }
             }
         } 
@@ -150,13 +153,19 @@ async function getStatusText() {
     const opChText = operatorChannelId ? `<#${operatorChannelId}>` : `❌ NOT CONFIGURED`;
     const targetChText = targetChannelId ? `<#${targetChannelId}> (\`${targetChannelId}\`)` : `❌ NOT CONFIGURED`;
 
+    // Menambahkan intip isi antrean terbaru
+    let queuePreview = `\`0\` Data tertahan`;
+    if (messageQueue.length > 0) {
+        queuePreview = `\`${messageQueue.length}\` Data tertahan dalam antrean`;
+    }
+
     return `\`\`\`ini\n[ SYSTEM DIAGNOSTIC REPORT ]\n\`\`\`` +
            `> **User Node:** ${accountStatus}\n` +
            `> **Bot Gateway:** ${client.user.tag}\n` +
            `> **Control Center:** ${opChText}\n` +
            `> **Target Vector:** ${targetChText}\n` +
            `> **Operational Status:** ${modeStatus}\n` +
-           `> **Payload Queue:** \`${messageQueue.length}\` Data tertahan\n` +
+           `> **Payload Queue:** ${queuePreview}\n` +
            `━━━━━━━━━━━━━━━━━━━━━━━━━`;
 }
 
@@ -185,75 +194,34 @@ client.on('interactionCreate', async interaction => {
             ephemeral: true 
         });
     }
-    else if (commandName === 'startkirim') {
+    else if (commandName === 'startkirimcs') {
         if (!operatorChannelId) return interaction.reply({ content: "**[ ⚠️ ALERT ]** Konfigurasi `/setchoperator` terlebih dahulu.", ephemeral: true });
         if (!targetChannelId) return interaction.reply({ content: "**[ ⚠️ ALERT ]** Tentukan rute menggunakan `/settarget` terlebih dahulu.", ephemeral: true });
 
-        const msgId = interaction.options.getString('message_id');
+        // Mengambil data dari form input Slash Command
+        const namaIC = interaction.options.getString('nama_ic');
+        const umurIC = interaction.options.getString('umur_ic');
+        const tglLahir = interaction.options.getString('tgl_lahir');
+        const story = interaction.options.getString('story');
+        const ssStats = interaction.options.getAttachment('ss_stats');
+        const ssTab = interaction.options.getAttachment('ss_tab');
         
-        try {
-            const targetMsg = await interaction.channel.messages.fetch(msgId);
-            let finalContent = targetMsg.content || "";
-            
-            if (targetMsg.attachments.size > 0) {
-                const attachmentUrls = targetMsg.attachments.map((a, index) => `[ 📎 Attachment Data ${index + 1} ](${a.url})`).join('\n');
-                finalContent += `\n\n${attachmentUrls}`; 
-            }
+        // Merakit template teks otomatis
+        const finalContent = `Nama [IC] : ${namaIC}\nUmur [IC] : ${umurIC}\nTanggal lahir [IC sesuai Id card] : ${tglLahir}\nSs stats & Id card [Wajib] : ada\nSs Tab Level in Game [Wajib] : ada\nStory : ${story}\nTag : <@&1212085960418791464>\n\n[ 📎 Lampiran SS Stats ](${ssStats.url})\n[ 📎 Lampiran SS Tab ](${ssTab.url})`;
 
-            if (!finalContent) return interaction.reply({ content: "**[ ⚠️ ALERT ]** Muatan pesan kosong. Operasi dibatalkan.", ephemeral: true });
-
-            messageQueue.push(finalContent);
-            await interaction.reply({ 
-                content: `**[ 🚀 EKSEKUSI ]** | Muatan pesan diamankan. Memulai penetrasi ke target...`, 
-                ephemeral: true 
-            });
-            processQueue();
-
-        } catch (err) {
-            await interaction.reply({ content: `**[ ❌ ERROR ]** Kordinat ID Pesan \`${msgId}\` tidak ditemukan.`, ephemeral: true });
-        }
+        messageQueue.push(finalContent);
+        
+        await interaction.reply({ 
+            content: `**[ 🚀 EKSEKUSI ]** | Formulir CS atas nama **${namaIC}** diamankan. Memulai penetrasi ke target...`, 
+            ephemeral: true 
+        });
+        
+        processQueue();
     }
     else if (commandName === 'status') {
         await interaction.deferReply({ ephemeral: true });
         const statusMsg = await getStatusText();
         await interaction.editReply({ content: statusMsg });
-    }
-});
-
-client.on('messageCreate', async message => {
-    if (message.author.bot) return;
-
-    if (message.content === '!status' || message.content === '.status') {
-        const statusMsg = await getStatusText();
-        return message.reply({ content: statusMsg });
-    }
-
-    if (message.content === '!startkirim' || message.content === '.startkirim') {
-        if (!operatorChannelId) return message.reply("**[ ⚠️ ALERT ]** Konfigurasi `/setchoperator` terlebih dahulu.");
-        if (!targetChannelId) return message.reply("**[ ⚠️ ALERT ]** Tentukan rute menggunakan `/settarget` terlebih dahulu.");
-
-        if (!message.reference || !message.reference.messageId) {
-            return message.reply("**[ ⚠️ ALERT ]** Balas (reply) muatan pesan yang ingin ditransmisikan.");
-        }
-
-        try {
-            const targetMsg = await message.channel.messages.fetch(message.reference.messageId);
-            let finalContent = targetMsg.content || "";
-            
-            if (targetMsg.attachments.size > 0) {
-                const attachmentUrls = targetMsg.attachments.map((a, index) => `[ 📎 Attachment Data ${index + 1} ](${a.url})`).join('\n');
-                finalContent += `\n\n${attachmentUrls}`; 
-            }
-
-            if (!finalContent) return message.reply("**[ ⚠️ ALERT ]** Muatan pesan kosong.");
-
-            messageQueue.push(finalContent);
-            message.reply("**[ 🚀 EKSEKUSI ]** | Muatan pesan diamankan. Memulai penetrasi ke target...");
-            processQueue();
-
-        } catch (err) {
-            message.reply("**[ ❌ ERROR ]** Gagal mengamankan muatan dari pesan yang direply.");
-        }
     }
 });
 
