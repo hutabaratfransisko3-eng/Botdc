@@ -56,7 +56,6 @@ async function registerCommands(clientId) {
     }
 }
 
-// Fungsi untuk mengecek profile akun user via API
 async function getUserProfile() {
     try {
         const response = await axios.get('https://discord.com/api/v10/users/@me', {
@@ -79,7 +78,6 @@ async function getUserProfile() {
     }
 }
 
-// Fungsi penembak pesan via User API
 async function sendAsUser(channelId, content) {
     try {
         await axios.post(
@@ -141,7 +139,6 @@ async function processQueue() {
     }
 }
 
-// Format ringkasan status
 async function getStatusText() {
     const userProfile = await getUserProfile();
     
@@ -192,11 +189,8 @@ client.on('interactionCreate', async interaction => {
         try {
             const targetMsg = await interaction.channel.messages.fetch(msgId);
             
+            // HANYA MENGAMBIL ISI TEKS UTAMA (Tanpa lampiran link attachment Discord)
             let finalContent = targetMsg.content || "";
-            if (targetMsg.attachments.size > 0) {
-                const attachmentUrls = targetMsg.attachments.map(a => a.url).join('\n');
-                finalContent += `\n${attachmentUrls}`; 
-            }
 
             if (!finalContent) return interaction.reply({ content: "❌ Pesan tersebut kosong!", flags: 64 });
 
@@ -234,11 +228,8 @@ client.on('messageCreate', async message => {
         try {
             const targetMsg = await message.channel.messages.fetch(message.reference.messageId);
 
+            // HANYA MENGAMBIL ISI TEKS UTAMA (Tanpa lampiran link attachment Discord)
             let finalContent = targetMsg.content || "";
-            if (targetMsg.attachments.size > 0) {
-                const attachmentUrls = targetMsg.attachments.map(a => a.url).join('\n');
-                finalContent += `\n${attachmentUrls}`; 
-            }
 
             if (!finalContent) return message.reply("❌ Pesan tersebut kosong.");
 
