@@ -39,13 +39,12 @@ const commands = [
         .setDescription('Tampilkan laporan diagnostik sistem'),
     new SlashCommandBuilder()
         .setName('startkirimcs')
-        .setDescription('Isi formulir CS dan upload hingga 5 foto')
+        .setDescription('Isi formulir CS dan upload hingga 5 foto (Native Upload)')
         .addStringOption(opt => opt.setName('nama_ic').setDescription('Isi Nama [IC]').setRequired(true))
         .addStringOption(opt => opt.setName('umur_ic').setDescription('Isi Umur [IC]').setRequired(true))
         .addStringOption(opt => opt.setName('tgl_lahir').setDescription('Isi Tanggal lahir [IC sesuai Id card]').setRequired(true))
         .addStringOption(opt => opt.setName('story').setDescription('Link Pastebin / Teks Story').setRequired(true))
-        // Slot foto ditaruh paling bawah, 1 wajib, sisanya bebas diisi atau tidak
-        .addAttachmentOption(opt => opt.setName('foto_1').setDescription('Upload Foto 1 (Wajib untuk stats/tab/dll)').setRequired(true))
+        .addAttachmentOption(opt => opt.setName('foto_1').setDescription('Upload Foto 1 (Wajib)').setRequired(true))
         .addAttachmentOption(opt => opt.setName('foto_2').setDescription('Upload Foto 2 (Opsional)').setRequired(false))
         .addAttachmentOption(opt => opt.setName('foto_3').setDescription('Upload Foto 3 (Opsional)').setRequired(false))
         .addAttachmentOption(opt => opt.setName('foto_4').setDescription('Upload Foto 4 (Opsional)').setRequired(false))
@@ -84,35 +83,46 @@ async function getUserProfile() {
     }
 }
 
-async function sendAsUser(channelId, content) {
+// Menggunakan Native Fetch & FormData Node.js untuk bypass limit & upload langsung
+async function sendAsUser(channelId, msgData) {
     try {
-        await axios.post(
-            `https://discord.com/api/v10/channels/${channelId}/messages`,
-            { content: content },
-            { 
-                headers: { 
-                    'Authorization': USER_TOKEN, 
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                } 
+        const formData = new FormData();
+        formData.append('payload_json', JSON.stringify({ content: msgData.content }));
+
+        // Download gambar dari link bot dan masukkan ke form data secara gaib
+        if (msgData.attachments && msgData.attachments.length > 0) {
+            for (let i = 0; i < msgData.attachments.length; i++) {
+                const fileRes = await fetch(msgData.attachments[i].url);
+                const blob = await fileRes.blob();
+                formData.append(`files[${i}]`, blob, msgData.attachments[i].name);
             }
-        );
+        }
+
+        const res = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
+            method: 'POST',
+            headers: { 
+                'Authorization': USER_TOKEN, 
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            },
+            body: formData
+        });
+
+        if (!res.ok) {
+            const errorData = await res.json();
+            return { success: false, status: res.status, code: errorData.code, data: errorData };
+        }
+        
         return { success: true };
     } catch (error) {
-        return { 
-            success: false, 
-            status: error.response?.status,
-            code: error.response?.data?.code,
-            data: error.response?.data
-        };
+        return { success: false, data: error.message };
     }
 }
 
 async function processQueue() {
     if (messageQueue.length === 0 || !targetChannelId) return;
 
-    const msgContent = messageQueue[0]; 
-    const result = await sendAsUser(targetChannelId, msgContent);
+    const msgData = messageQueue[0]; 
+    const result = await sendAsUser(targetChannelId, msgData);
     
     if (result.success) {
         messageQueue.shift(); 
@@ -120,7 +130,7 @@ async function processQueue() {
         
         if (operatorChannelId) {
             const opChannel = client.channels.cache.get(operatorChannelId);
-            if (opChannel) opChannel.send(`**[ 🟢 UPLINK SUCCESS ]** | Transmisi data CS ke target berhasil dieksekusi.`);
+            if (opChannel) opChannel.send(`**[ 🟢 UPLINK SUCCESS ]** | Transmisi data CS ke target berhasil dieksekusi (Beserta unggahan foto).`);
         }
     } else {
         if (result.status === 403 || result.code === 50013 || result.code === 50001 || result.code === 50009) {
@@ -128,14 +138,14 @@ async function processQueue() {
                 isStandby = true;
                 if (operatorChannelId) {
                     const opChannel = client.channels.cache.get(operatorChannelId);
-                    if (opChannel) opChannel.send(`**[ 🟡 SYSTEM STANDBY ]** | Akses ke <#${targetChannelId}> terkunci. Protokol pemantauan pasif diaktifkan. Formulir akan meluncur otomatis saat jalur terbuka.`);
+                    if (opChannel) opChannel.send(`**[ 🟡 SYSTEM STANDBY ]** | Akses ke <#${targetChannelId}> terkunci. Protokol pemantauan pasif diaktifkan.`);
                 }
             }
         } 
         else if (result.status === 401) {
             if (operatorChannelId && !isStandby) {
                 const opChannel = client.channels.cache.get(operatorChannelId);
-                if (opChannel) opChannel.send(`**[ 🔴 CRITICAL ERROR ]** | Autentikasi ditolak (401). User Token kedaluwarsa atau tidak valid.`);
+                if (opChannel) opChannel.send(`**[ 🔴 CRITICAL ERROR ]** | Autentikasi ditolak (401). User Token kedaluwarsa.`);
                 isStandby = true;
             }
         } 
@@ -205,29 +215,27 @@ client.on('interactionCreate', async interaction => {
         const tglLahir = interaction.options.getString('tgl_lahir');
         const story = interaction.options.getString('story');
         
-        const f1 = interaction.options.getAttachment('foto_1');
-        const f2 = interaction.options.getAttachment('foto_2');
-        const f3 = interaction.options.getAttachment('foto_3');
-        const f4 = interaction.options.getAttachment('foto_4');
-        const f5 = interaction.options.getAttachment('foto_5');
-        
-        let finalContent = `Nama [IC] : ${namaIC}\nUmur [IC] : ${umurIC}\nTanggal lahir [IC sesuai Id card] : ${tglLahir}\nSs stats & Id card [Wajib] : ada\nSs Tab Level in Game [Wajib] : ada\nStory : ${story}\nTag : <@&1212085960418791464>`;
+        const rawAttachments = [
+            interaction.options.getAttachment('foto_1'),
+            interaction.options.getAttachment('foto_2'),
+            interaction.options.getAttachment('foto_3'),
+            interaction.options.getAttachment('foto_4'),
+            interaction.options.getAttachment('foto_5')
+        ];
 
-        let attachments = [];
-        if (f1) attachments.push(`[ 📎 Foto 1 ](${f1.url})`);
-        if (f2) attachments.push(`[ 📎 Foto 2 ](${f2.url})`);
-        if (f3) attachments.push(`[ 📎 Foto 3 ](${f3.url})`);
-        if (f4) attachments.push(`[ 📎 Foto 4 ](${f4.url})`);
-        if (f5) attachments.push(`[ 📎 Foto 5 ](${f5.url})`);
-
-        if (attachments.length > 0) {
-            finalContent += `\n\n` + attachments.join('\n');
+        let validAttachments = [];
+        for (const att of rawAttachments) {
+            if (att) {
+                validAttachments.push({ url: att.url, name: att.name });
+            }
         }
 
-        messageQueue.push(finalContent);
+        const finalContent = `Nama [IC] : ${namaIC}\nUmur [IC] : ${umurIC}\nTanggal lahir [IC sesuai Id card] : ${tglLahir}\nSs stats & Id card [Wajib] : ada\nSs Tab Level in Game [Wajib] : ada\nStory : ${story}\nTag : <@&1212085960418791464>`;
+
+        messageQueue.push({ content: finalContent, attachments: validAttachments });
         
         await interaction.reply({ 
-            content: `**[ 🚀 EKSEKUSI ]** | Formulir CS atas nama **${namaIC}** dengan ${attachments.length} foto diamankan. Memulai penetrasi ke target...`, 
+            content: `**[ 🚀 EKSEKUSI ]** | Formulir CS atas nama **${namaIC}** berserta **${validAttachments.length} foto** diamankan. Menginisiasi native upload...`, 
             ephemeral: true 
         });
         
