@@ -73,30 +73,37 @@ async function getUserProfile() {
         const tag = user.discriminator && user.discriminator !== '0' 
             ? `${user.username}#${user.discriminator}` 
             : user.username;
-        return {
-            valid: true,
-            name: user.global_name ? `${user.global_name} (@${tag})` : `@${tag}`,
-            id: user.id
-        };
+        return { valid: true, name: user.global_name ? `${user.global_name} (@${tag})` : `@${tag}`, id: user.id };
     } catch (error) {
         return { valid: false };
     }
 }
 
-// Menggunakan Native Fetch & FormData Node.js untuk bypass limit & upload langsung
+// Upload Foto & Bypass API Metadata
 async function sendAsUser(channelId, msgData) {
     try {
         const formData = new FormData();
-        formData.append('payload_json', JSON.stringify({ content: msgData.content }));
+        const attachmentsData = [];
 
-        // Download gambar dari link bot dan masukkan ke form data secara gaib
         if (msgData.attachments && msgData.attachments.length > 0) {
             for (let i = 0; i < msgData.attachments.length; i++) {
+                // Tarik gambar dari Discord server
                 const fileRes = await fetch(msgData.attachments[i].url);
                 const blob = await fileRes.blob();
                 formData.append(`files[${i}]`, blob, msgData.attachments[i].name);
+
+                // Wajib di API v10 agar foto tidak ditolak
+                attachmentsData.push({
+                    id: i.toString(),
+                    filename: msgData.attachments[i].name
+                });
             }
         }
+
+        formData.append('payload_json', JSON.stringify({
+            content: msgData.content,
+            attachments: attachmentsData
+        }));
 
         const res = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
             method: 'POST',
@@ -108,7 +115,7 @@ async function sendAsUser(channelId, msgData) {
         });
 
         if (!res.ok) {
-            const errorData = await res.json();
+            const errorData = await res.json().catch(() => ({}));
             return { success: false, status: res.status, code: errorData.code, data: errorData };
         }
         
@@ -130,15 +137,16 @@ async function processQueue() {
         
         if (operatorChannelId) {
             const opChannel = client.channels.cache.get(operatorChannelId);
-            if (opChannel) opChannel.send(`**[ 🟢 UPLINK SUCCESS ]** | Transmisi data CS ke target berhasil dieksekusi (Beserta unggahan foto).`);
+            if (opChannel) opChannel.send(`**[ 🟢 UPLINK SUCCESS ]** | Transmisi formulir CS dan foto ke target berhasil!`);
         }
     } else {
-        if (result.status === 403 || result.code === 50013 || result.code === 50001 || result.code === 50009) {
+        // Cek jika error karena channel ditutup/belum ada role (403/50013/50001)
+        if (result.status === 403 || result.code === 50013 || result.code === 50001 || result.code === 50009 || result.status === 429) {
             if (!isStandby) {
                 isStandby = true;
                 if (operatorChannelId) {
                     const opChannel = client.channels.cache.get(operatorChannelId);
-                    if (opChannel) opChannel.send(`**[ 🟡 SYSTEM STANDBY ]** | Akses ke <#${targetChannelId}> terkunci. Protokol pemantauan pasif diaktifkan.`);
+                    if (opChannel) opChannel.send(`**[ 🟡 SYSTEM STANDBY ]** | Akses ke <#${targetChannelId}> terkunci / dilimit. Protokol pemantauan aktif. Akan meluncur otomatis saat jalur terbuka.`);
                 }
             }
         } 
@@ -150,7 +158,13 @@ async function processQueue() {
             }
         } 
         else {
+            // ERROR LAINNYA (Misal file corrupt / format salah) -> BUANG DARI ANTREAN AGAR TIDAK MACET!
+            messageQueue.shift();
             console.log(`[RAILWAY LOG ERROR]`, JSON.stringify(result.data || "Unknown Error"));
+            if (operatorChannelId) {
+                const opChannel = client.channels.cache.get(operatorChannelId);
+                if (opChannel) opChannel.send(`**[ ❌ FATAL ERROR ]** Discord menolak pesan (Kode: ${result.status}). Pesan dihapus dari antrean agar sistem tidak macet. Silakan input ulang!`);
+            }
         }
     }
 }
@@ -193,18 +207,12 @@ client.on('interactionCreate', async interaction => {
 
     if (commandName === 'setchoperator') {
         operatorChannelId = interaction.channelId;
-        await interaction.reply({ 
-            content: `**[ ⚙️ CONFIG ]** | Channel ini telah ditetapkan sebagai Pusat Kontrol Utama.`, 
-            ephemeral: true 
-        });
+        await interaction.reply({ content: `**[ ⚙️ CONFIG ]** | Channel ini telah ditetapkan sebagai Pusat Kontrol Utama.`, ephemeral: true });
     }
     else if (commandName === 'settarget') {
         targetChannelId = interaction.options.getString('channel_id');
         isStandby = false; 
-        await interaction.reply({ 
-            content: `**[ 🎯 TARGET ]** | Kordinat tujuan berhasil dikunci ke: <#${targetChannelId}>.`, 
-            ephemeral: true 
-        });
+        await interaction.reply({ content: `**[ 🎯 TARGET ]** | Kordinat tujuan berhasil dikunci ke: <#${targetChannelId}>.`, ephemeral: true });
     }
     else if (commandName === 'startkirimcs') {
         if (!operatorChannelId) return interaction.reply({ content: "**[ ⚠️ ALERT ]** Konfigurasi `/setchoperator` terlebih dahulu.", ephemeral: true });
@@ -225,9 +233,7 @@ client.on('interactionCreate', async interaction => {
 
         let validAttachments = [];
         for (const att of rawAttachments) {
-            if (att) {
-                validAttachments.push({ url: att.url, name: att.name });
-            }
+            if (att) validAttachments.push({ url: att.url, name: att.name });
         }
 
         const finalContent = `Nama [IC] : ${namaIC}\nUmur [IC] : ${umurIC}\nTanggal lahir [IC sesuai Id card] : ${tglLahir}\nSs stats & Id card [Wajib] : ada\nSs Tab Level in Game [Wajib] : ada\nStory : ${story}\nTag : <@&1212085960418791464>`;
@@ -235,7 +241,7 @@ client.on('interactionCreate', async interaction => {
         messageQueue.push({ content: finalContent, attachments: validAttachments });
         
         await interaction.reply({ 
-            content: `**[ 🚀 EKSEKUSI ]** | Formulir CS atas nama **${namaIC}** berserta **${validAttachments.length} foto** diamankan. Menginisiasi native upload...`, 
+            content: `**[ 🚀 EKSEKUSI ]** | Formulir CS atas nama **${namaIC}** berserta **${validAttachments.length} foto** diamankan. Menginisiasi penetrasi...`, 
             ephemeral: true 
         });
         
